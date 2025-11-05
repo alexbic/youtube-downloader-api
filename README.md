@@ -2,6 +2,10 @@
 
 Простой и мощный REST API для скачивания видео с YouTube и получения прямых ссылок на видеофайлы.
 
+[![Docker Hub](https://img.shields.io/docker/v/alexbic/youtube-downloader-api?label=Docker%20Hub&logo=docker)](https://hub.docker.com/r/alexbic/youtube-downloader-api)
+[![GitHub Container Registry](https://img.shields.io/badge/ghcr.io-image-blue?logo=github)](https://github.com/alexbic/youtube-downloader-api/pkgs/container/youtube-downloader-api)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/alexbic/youtube-downloader-api/docker-build.yml?branch=main)](https://github.com/alexbic/youtube-downloader-api/actions)
+
 ## Возможности
 
 - Получение прямой ссылки на видео без загрузки на сервер
@@ -9,19 +13,35 @@
 - Получение полной информации о видео
 - Поддержка различных форматов и качества
 - Health check endpoint для мониторинга
+- Автоматическая публикация на Docker Hub и GitHub Container Registry
+- Поддержка платформ: linux/amd64, linux/arm64
 
-## Docker Hub
+## Установка
+
+### Из Docker Hub
 
 ```bash
-docker pull yourusername/youtube-downloader-api:latest
+docker pull alexbic/youtube-downloader-api:latest
+```
+
+### Из GitHub Container Registry
+
+```bash
+docker pull ghcr.io/alexbic/youtube-downloader-api:latest
 ```
 
 ## Быстрый старт
 
-### Запуск через Docker
+### Запуск через Docker (Docker Hub)
 
 ```bash
-docker run -d -p 5000:5000 --name yt-downloader yourusername/youtube-downloader-api:latest
+docker run -d -p 5000:5000 --name yt-downloader alexbic/youtube-downloader-api:latest
+```
+
+### Запуск через Docker (GitHub Container Registry)
+
+```bash
+docker run -d -p 5000:5000 --name yt-downloader ghcr.io/alexbic/youtube-downloader-api:latest
 ```
 
 ### Запуск через Docker Compose
@@ -30,7 +50,9 @@ docker run -d -p 5000:5000 --name yt-downloader yourusername/youtube-downloader-
 version: '3.8'
 services:
   youtube-downloader:
-    image: yourusername/youtube-downloader-api:latest
+    image: alexbic/youtube-downloader-api:latest
+    # или используйте GitHub Container Registry:
+    # image: ghcr.io/alexbic/youtube-downloader-api:latest
     ports:
       - "5000:5000"
     volumes:
@@ -229,7 +251,7 @@ getDirectUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ')
 ### Локальная сборка
 
 ```bash
-git clone https://github.com/yourusername/youtube-downloader-api.git
+git clone https://github.com/alexbic/youtube-downloader-api.git
 cd youtube-downloader-api
 docker build -t youtube-downloader-api .
 docker run -p 5000:5000 youtube-downloader-api
@@ -242,14 +264,17 @@ pip install -r requirements.txt
 python app.py
 ```
 
-## Настройка GitHub Actions
+## CI/CD
 
-1. Создайте Docker Hub аккаунт
-2. Создайте Access Token в Docker Hub (Account Settings → Security → New Access Token)
-3. Добавьте секреты в GitHub repository:
-   - `DOCKER_USERNAME` - ваш Docker Hub username
-   - `DOCKER_TOKEN` - созданный Access Token
-4. Push в main branch автоматически соберет и опубликует образ
+Проект настроен с автоматической сборкой и публикацией через GitHub Actions.
+
+При каждом push в `main` ветку автоматически:
+1. Собирается Docker образ для платформ linux/amd64 и linux/arm64
+2. Публикуется на Docker Hub: `alexbic/youtube-downloader-api`
+3. Публикуется на GitHub Container Registry: `ghcr.io/alexbic/youtube-downloader-api`
+4. Обновляется описание на Docker Hub
+
+Статус сборки можно посмотреть на [странице Actions](https://github.com/alexbic/youtube-downloader-api/actions)
 
 ## Технологии
 
