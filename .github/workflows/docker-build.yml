@@ -7,10 +7,22 @@ on:
       - master
     tags:
       - 'v*.*.*'
+    paths:
+      - 'app.py'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/docker-build.yml'
   pull_request:
     branches:
       - main
       - master
+    paths:
+      - 'app.py'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/docker-build.yml'
   workflow_dispatch:
 
 env:
