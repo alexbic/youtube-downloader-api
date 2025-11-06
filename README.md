@@ -119,7 +119,7 @@ Content-Type: application/json
 
 **Важно:** Прямые ссылки имеют ограниченный срок действия и могут выдать 403 Forbidden при скачивании. Для гарантированного скачивания используйте `/download_direct` или `/download_video`.
 
-### 3. Скачать видео напрямую (рекомендуется)
+### 3. Скачать видео напрямую (рекомендуется для n8n)
 
 ```bash
 POST /download_direct
@@ -131,7 +131,25 @@ Content-Type: application/json
 }
 ```
 
-Возвращает видео файл напрямую. Этот endpoint решает проблему 403 Forbidden, скачивая видео на сервер и отправляя его клиенту. Файл автоматически удаляется после отправки.
+Ответ:
+```json
+{
+  "success": true,
+  "video_id": "VIDEO_ID",
+  "title": "Название видео",
+  "filename": "video.mp4",
+  "file_path": "/app/downloads/tmp123/video.mp4",
+  "file_size": 15728640,
+  "download_url": "/download_file/tmp123/video.mp4",
+  "duration": 180,
+  "resolution": "1280x720",
+  "ext": "mp4",
+  "note": "Use download_url to get the file. File will auto-delete after 1 hour.",
+  "processed_at": "2024-01-15T10:30:00.123456"
+}
+```
+
+Этот endpoint решает проблему 403 Forbidden. Скачивает видео на сервер и возвращает `download_url` для получения файла. Идеально для n8n и других инструментов автоматизации.
 
 ### 5. Скачать видео на сервер
 

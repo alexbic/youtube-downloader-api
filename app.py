@@ -12,6 +12,21 @@ app = Flask(__name__)
 DOWNLOAD_DIR = "/app/downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+# Очистка старых файлов (старше 1 часа)
+def cleanup_old_files():
+    """Удаляет файлы старше 1 часа"""
+    import time
+    current_time = time.time()
+    for root, dirs, files in os.walk(DOWNLOAD_DIR):
+        for d in dirs:
+            dir_path = os.path.join(root, d)
+            try:
+                # Проверяем время модификации директории
+                if current_time - os.path.getmtime(dir_path) > 3600:  # 1 час
+                    shutil.rmtree(dir_path)
+            except Exception:
+                pass
+
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
@@ -123,7 +138,7 @@ def download_file(folder, filename):
 
 @app.route('/download_direct', methods=['POST'])
 def download_direct():
-    """Скачать видео напрямую без сохранения на сервере (решает проблему 403)"""
+    """Скачать видео и вернуть URL для скачивания (решает проблему 403)"""
     try:
         data = request.json
         video_url = data.get('url')
@@ -132,44 +147,45 @@ def download_direct():
         if not video_url:
             return jsonify({"success": False, "error": "URL is required"}), 400
 
-        # Используем временную папку
-        temp_dir = tempfile.mkdtemp()
+        # Очищаем старые файлы перед загрузкой
+        cleanup_old_files()
 
-        try:
-            ydl_opts = {
-                'format': quality,
-                'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
-                'quiet': True,
-                'no_warnings': True,
-            }
+        # Создаем уникальную папку для загрузки в DOWNLOAD_DIR
+        temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(video_url, download=True)
+        ydl_opts = {
+            'format': quality,
+            'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
+            'quiet': True,
+            'no_warnings': True,
+        }
 
-                # Находим скачанный файл
-                downloaded_files = os.listdir(temp_dir)
-                if downloaded_files:
-                    filename = downloaded_files[0]
-                    file_path = os.path.join(temp_dir, filename)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=True)
 
-                    # Отправляем файл
-                    response = send_file(
-                        file_path,
-                        as_attachment=True,
-                        download_name=filename
-                    )
+            # Находим скачанный файл
+            downloaded_files = os.listdir(temp_dir)
+            if downloaded_files:
+                filename = downloaded_files[0]
+                file_path = os.path.join(temp_dir, filename)
+                file_size = os.path.getsize(file_path)
 
-                    # Очистка будет выполнена после отправки
-                    return response
-                else:
-                    return jsonify({"success": False, "error": "No file downloaded"}), 500
-
-        finally:
-            # Очищаем временную папку
-            try:
-                shutil.rmtree(temp_dir)
-            except:
-                pass
+                return jsonify({
+                    "success": True,
+                    "video_id": info.get('id'),
+                    "title": info.get('title'),
+                    "filename": filename,
+                    "file_path": file_path,
+                    "file_size": file_size,
+                    "download_url": f"/download_file/{os.path.basename(temp_dir)}/{filename}",
+                    "duration": info.get('duration'),
+                    "resolution": info.get('resolution'),
+                    "ext": info.get('ext'),
+                    "note": "Use download_url to get the file. File will auto-delete after 1 hour.",
+                    "processed_at": datetime.now().isoformat()
+                })
+            else:
+                return jsonify({"success": False, "error": "No file downloaded"}), 500
 
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
