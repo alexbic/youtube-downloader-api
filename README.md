@@ -161,7 +161,19 @@ Content-Type: application/json
 
 **Использование в n8n:**
 
-Node 1 - HTTP Request (Получить URL):
+**Шаг 0: Настройте n8n для работы с большими файлами**
+
+Добавьте в docker-compose.yml вашего n8n стека:
+```yaml
+services:
+  n8n:
+    environment:
+      - N8N_DEFAULT_BINARY_DATA_MODE=filesystem
+```
+
+Перезапустите n8n после изменения конфигурации.
+
+**Шаг 1: HTTP Request Node (Получить URL)**
 ```
 Method: POST
 URL: http://youtube_downloader:5000/download_direct
@@ -169,7 +181,7 @@ Body: {"url": "https://youtube.com/watch?v=..."}
 Response Format: JSON
 ```
 
-Node 2 - HTTP Request (Скачать файл):
+**Шаг 2: HTTP Request Node (Скачать файл)**
 ```
 Method: GET
 URL: {{ $json.download_url }}
@@ -177,7 +189,10 @@ Response Format: File  ⚠️ ВАЖНО: Выберите "File", НЕ "String"
 Binary Property: data
 ```
 
-**Критически важно**: В Node 2 обязательно установите "Response Format" в значение "File", иначе n8n попытается загрузить видео в память как строку и выдаст ошибку "Cannot create a string longer than 0x1fffffe8 characters" для больших файлов.
+**Критически важно**:
+1. n8n должен быть настроен с `N8N_DEFAULT_BINARY_DATA_MODE=filesystem`
+2. В Node 2 установите "Response Format" в значение "File"
+3. Без правильной конфигурации n8n будет пытаться загрузить видео в память и выдаст ошибку "Cannot create a string longer than 0x1fffffe8 characters"
 
 API автоматически вернёт полный URL с правильным хостом (например: `http://youtube_downloader:5000/download_file/video_20240115_103000.mp4`)
 
@@ -355,13 +370,37 @@ python app.py
 
 ### Ошибка: "Cannot create a string longer than 0x1fffffe8 characters"
 
-**Причина**: HTTP Request node в n8n пытается загрузить видеофайл в память как строку.
+**Причина**: n8n работает в режиме `binaryDataMode: "default"`, который хранит бинарные данные в памяти. Для больших файлов (>500MB) память переполняется.
 
-**Решение**: В ноде скачивания файла (Node 2) измените настройки:
+**Решение 1: Настроить n8n для работы с большими файлами (РЕКОМЕНДУЕТСЯ)**
+
+Добавьте переменную окружения в ваш docker-compose.yml или docker run:
+
+```yaml
+# docker-compose.yml
+services:
+  n8n:
+    environment:
+      - N8N_DEFAULT_BINARY_DATA_MODE=filesystem
+      # ... другие переменные
+```
+
+Или для docker run:
+```bash
+docker run -e N8N_DEFAULT_BINARY_DATA_MODE=filesystem ...
+```
+
+После этого перезапустите n8n. Теперь бинарные данные будут сохраняться на диск вместо памяти.
+
+**Решение 2: Настройки HTTP Request node**
+
+В ноде скачивания файла (Node 2):
 1. Откройте настройки HTTP Request node
 2. Найдите параметр **"Response Format"**
 3. Измените с "String" на **"File"**
 4. Убедитесь что указано "Binary Property": **data**
+
+**⚠️ Важно**: Если вы используете queue mode в n8n, режим filesystem не поддерживается. В этом случае рассмотрите использование S3 (`N8N_DEFAULT_BINARY_DATA_MODE=s3`).
 
 ### Ошибка: "Invalid URL: /download_file/..."
 
