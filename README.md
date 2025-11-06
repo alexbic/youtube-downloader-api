@@ -231,6 +231,8 @@ GET /download_file/<filename>
 
 Возвращает файл для скачивания. Пример: `/download_file/video_20240115_103000.mp4`
 
+**Примечание**: `/download_file/` - это API endpoint (URL), а `/app/downloads/` - физический путь к файлам внутри Docker контейнера.
+
 ### 7. Получить информацию о видео
 
 ```bash
