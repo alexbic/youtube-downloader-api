@@ -361,7 +361,7 @@ python app.py
 
 - Python 3.11
 - Flask 3.0.0
-- yt-dlp 2023.12.30
+- yt-dlp (latest)
 - FFmpeg
 - Gunicorn
 - Docker
