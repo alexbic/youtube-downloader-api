@@ -90,9 +90,12 @@ def download_video():
         # Создаем уникальную папку для загрузки
         temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
 
+        # Используем короткое безопасное имя файла
+        safe_filename = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
         ydl_opts = {
             'format': quality,
-            'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
+            'outtmpl': os.path.join(temp_dir, f'{safe_filename}.%(ext)s'),
             'quiet': True,
             'no_warnings': True,
         }
@@ -105,6 +108,11 @@ def download_video():
             if downloaded_files:
                 filename = downloaded_files[0]
                 file_path = os.path.join(temp_dir, filename)
+
+                # Устанавливаем права доступа
+                os.chmod(file_path, 0o644)
+                os.chmod(temp_dir, 0o755)
+
                 file_size = os.path.getsize(file_path)
 
                 return jsonify({
@@ -153,9 +161,13 @@ def download_direct():
         # Создаем уникальную папку для загрузки в DOWNLOAD_DIR
         temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
 
+        # Используем короткое безопасное имя файла вместо оригинального title
+        # Оригинальное название сохраняется в metadata для информации
+        safe_filename = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
         ydl_opts = {
             'format': quality,
-            'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
+            'outtmpl': os.path.join(temp_dir, f'{safe_filename}.%(ext)s'),
             'quiet': True,
             'no_warnings': True,
         }
@@ -168,6 +180,12 @@ def download_direct():
             if downloaded_files:
                 filename = downloaded_files[0]
                 file_path = os.path.join(temp_dir, filename)
+
+                # Устанавливаем права доступа 644 (rw-r--r--)
+                os.chmod(file_path, 0o644)
+                # Устанавливаем права на директорию 755 (rwxr-xr-x)
+                os.chmod(temp_dir, 0o755)
+
                 file_size = os.path.getsize(file_path)
 
                 # Формируем пути для скачивания

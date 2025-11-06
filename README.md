@@ -137,17 +137,24 @@ Content-Type: application/json
   "success": true,
   "video_id": "VIDEO_ID",
   "title": "Название видео",
-  "filename": "video.mp4",
-  "file_path": "/app/downloads/tmp123/video.mp4",
+  "filename": "video_20240115_103000.mp4",
+  "file_path": "/app/downloads/tmp123/video_20240115_103000.mp4",
   "file_size": 15728640,
-  "download_url": "/download_file/tmp123/video.mp4",
+  "download_url": "http://youtube_downloader:5000/download_file/tmp123/video_20240115_103000.mp4",
+  "download_path": "/download_file/tmp123/video_20240115_103000.mp4",
   "duration": 180,
   "resolution": "1280x720",
   "ext": "mp4",
-  "note": "Use download_url to get the file. File will auto-delete after 1 hour.",
+  "note": "Use download_url (full URL) or download_path (relative) to get the file. File will auto-delete after 1 hour.",
   "processed_at": "2024-01-15T10:30:00.123456"
 }
 ```
+
+**Обратите внимание**:
+- `filename` теперь короткое безопасное имя в формате `video_YYYYMMDD_HHMMSS.ext`
+- Оригинальное название сохраняется в поле `title`
+- Файлы имеют правильные права доступа (644) для чтения из n8n
+- `download_url` содержит полный URL для использования в n8n
 
 Этот endpoint решает проблему 403 Forbidden. Скачивает видео на сервер и возвращает `download_url` для получения файла. Идеально для n8n и других инструментов автоматизации.
 
