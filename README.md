@@ -151,6 +151,21 @@ Content-Type: application/json
 
 Этот endpoint решает проблему 403 Forbidden. Скачивает видео на сервер и возвращает `download_url` для получения файла. Идеально для n8n и других инструментов автоматизации.
 
+**Использование в n8n:**
+
+Node 1 - HTTP Request:
+```
+POST http://youtube_downloader:5000/download_direct
+Body: {"url": "https://youtube.com/watch?v=..."}
+```
+
+Node 2 - HTTP Request:
+```
+GET {{ $json.download_url }}
+```
+
+API автоматически вернёт полный URL с правильным хостом (например: `http://youtube_downloader:5000/download_file/tmp123/video.mp4`)
+
 ### 5. Скачать видео на сервер
 
 ```bash

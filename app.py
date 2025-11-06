@@ -170,6 +170,12 @@ def download_direct():
                 file_path = os.path.join(temp_dir, filename)
                 file_size = os.path.getsize(file_path)
 
+                # Формируем пути для скачивания
+                download_path = f"/download_file/{os.path.basename(temp_dir)}/{filename}"
+                # Получаем base URL из request (работает в Docker сети)
+                base_url = request.host_url.rstrip('/')
+                full_download_url = f"{base_url}{download_path}"
+
                 return jsonify({
                     "success": True,
                     "video_id": info.get('id'),
@@ -177,11 +183,12 @@ def download_direct():
                     "filename": filename,
                     "file_path": file_path,
                     "file_size": file_size,
-                    "download_url": f"/download_file/{os.path.basename(temp_dir)}/{filename}",
+                    "download_url": full_download_url,
+                    "download_path": download_path,
                     "duration": info.get('duration'),
                     "resolution": info.get('resolution'),
                     "ext": info.get('ext'),
-                    "note": "Use download_url to get the file. File will auto-delete after 1 hour.",
+                    "note": "Use download_url (full URL) or download_path (relative) to get the file. File will auto-delete after 1 hour.",
                     "processed_at": datetime.now().isoformat()
                 })
             else:
