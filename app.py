@@ -206,6 +206,35 @@ def download_video():
             return jsonify({"success": False, "error": f"Invalid client_meta: {err}"}), 400
         if not video_url:
             return jsonify({"success": False, "error": "URL is required"}), 400
+
+        # Async mode: start background task and return immediately
+        if bool(data.get('async', False)):
+            cleanup_old_files()
+            task_id = str(uuid.uuid4())
+            create_task_dirs(task_id)
+            task_data = {
+                "task_id": task_id,
+                "status": "queued",
+                "created_at": datetime.now().isoformat(),
+                "video_url": video_url,
+                "quality": quality,
+                "client_meta": client_meta
+            }
+            save_task(task_id, task_data)
+            base_url = request.host_url.rstrip('/')
+            thread = threading.Thread(target=_background_download, args=(task_id, video_url, quality, client_meta, "download_video_async", base_url))
+            thread.daemon = True
+            thread.start()
+            return jsonify({
+                "success": True,
+                "task_id": task_id,
+                "status": "processing",
+                "check_status_url": f"/task_status/{task_id}",
+                "metadata_url": f"/download/{task_id}/metadata.json",
+                "client_meta": client_meta
+            }), 202
+
+        # Sync mode: download immediately and return result
         task_id = str(uuid.uuid4())
         create_task_dirs(task_id)
         safe_filename = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -434,7 +463,7 @@ def task_status(task_id):
         resp['error'] = task.get('error')
     return jsonify(resp)
 
-def _background_download(task_id: str, video_url: str, quality: str, client_meta: dict):
+def _background_download(task_id: str, video_url: str, quality: str, client_meta: dict, operation: str = "download_video_async", base_url: str = ""):
     try:
         update_task(task_id, {"status": "downloading"})
         safe_filename = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -449,7 +478,6 @@ def _background_download(task_id: str, video_url: str, quality: str, client_meta
                 os.chmod(file_path, 0o644)
                 file_size = os.path.getsize(file_path)
                 download_path = f"/download_file/{filename}"
-                base_url = request.host_url.rstrip('/') if request else ''
                 full_download_url = f"{base_url}{download_path}" if base_url else download_path
                 task_download_path = build_download_path(task_id, filename)
                 update_task(task_id, {
@@ -468,7 +496,7 @@ def _background_download(task_id: str, video_url: str, quality: str, client_meta
                 metadata = {
                     "task_id": task_id,
                     "status": "completed",
-                    "operation": "download_direct_async",
+                    "operation": operation,
                     "video_id": info.get('id'),
                     "title": info.get('title'),
                     "filename": filename,
@@ -485,52 +513,6 @@ def _background_download(task_id: str, video_url: str, quality: str, client_meta
                 update_task(task_id, {"status": "error", "error": "File not downloaded"})
     except Exception as e:
         update_task(task_id, {"status": "error", "error": str(e)})
-
-@app.route('/download_direct_async', methods=['POST'])
-@require_api_key
-def download_direct_async():
-    try:
-        data = request.json or {}
-        video_url = data.get('url')
-        quality = data.get('quality', 'best[height<=720]')
-        client_meta = data.get('client_meta') or data.get('meta')
-        if isinstance(client_meta, str):
-            try:
-                if len(client_meta.encode('utf-8')) > MAX_CLIENT_META_BYTES:
-                    return jsonify({"success": False, "error": f"Invalid client_meta: exceeds {MAX_CLIENT_META_BYTES} bytes"}), 400
-                parsed = json.loads(client_meta)
-                client_meta = parsed if isinstance(parsed, dict) else None
-            except json.JSONDecodeError as e:
-                return jsonify({"success": False, "error": f"Invalid client_meta JSON: {e}"}), 400
-        ok, err = validate_client_meta(client_meta)
-        if not ok:
-            return jsonify({"success": False, "error": f"Invalid client_meta: {err}"}), 400
-        if not video_url:
-            return jsonify({"success": False, "error": "url is required"}), 400
-        cleanup_old_files()
-        task_id = str(uuid.uuid4())
-        create_task_dirs(task_id)
-        task_data = {
-            "task_id": task_id,
-            "status": "queued",
-            "created_at": datetime.now().isoformat(),
-            "video_url": video_url,
-            "quality": quality,
-            "client_meta": client_meta
-        }
-        save_task(task_id, task_data)
-        thread = threading.Thread(target=_background_download, args=(task_id, video_url, quality, client_meta))
-        thread.daemon = True
-        thread.start()
-        return jsonify({
-            "success": True,
-            "task_id": task_id,
-            "status": "processing",
-            "check_status_url": f"/task_status/{task_id}",
-            "client_meta": client_meta
-        }), 202
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)
