@@ -192,6 +192,7 @@ def download_video():
         data = request.json or {}
         video_url = data.get('url')
         quality = data.get('quality', 'best[height<=720]')
+        cookies_from_browser = data.get('cookiesFromBrowser')
         client_meta = data.get('client_meta') or data.get('meta')
         if isinstance(client_meta, str):
             try:
@@ -218,11 +219,12 @@ def download_video():
                 "created_at": datetime.now().isoformat(),
                 "video_url": video_url,
                 "quality": quality,
+                "cookies_from_browser": cookies_from_browser,
                 "client_meta": client_meta
             }
             save_task(task_id, task_data)
             base_url = request.host_url.rstrip('/')
-            thread = threading.Thread(target=_background_download, args=(task_id, video_url, quality, client_meta, "download_video_async", base_url))
+            thread = threading.Thread(target=_background_download, args=(task_id, video_url, quality, client_meta, "download_video_async", base_url, cookies_from_browser))
             thread.daemon = True
             thread.start()
             return jsonify({
@@ -240,6 +242,8 @@ def download_video():
         safe_filename = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         outtmpl = os.path.join(get_task_output_dir(task_id), f'{safe_filename}.%(ext)s')
         ydl_opts = {'format': quality,'outtmpl': outtmpl,'quiet': True,'no_warnings': True}
+        if cookies_from_browser:
+            ydl_opts['cookiesfrombrowser'] = (cookies_from_browser,)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
             ext = info.get('ext', 'mp4')
@@ -463,12 +467,16 @@ def task_status(task_id):
         resp['error'] = task.get('error')
     return jsonify(resp)
 
-def _background_download(task_id: str, video_url: str, quality: str, client_meta: dict, operation: str = "download_video_async", base_url: str = ""):
+def _background_download(task_id: str, video_url: str, quality: str, client_meta: dict, operation: str = "download_video_async", base_url: str = "", cookies_from_browser: str = None):
     try:
         update_task(task_id, {"status": "downloading"})
         safe_filename = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         outtmpl = os.path.join(get_task_output_dir(task_id), f'{safe_filename}.%(ext)s')
         ydl_opts = {'format': quality,'outtmpl': outtmpl,'quiet': True,'no_warnings': True}
+        if cookies_from_browser:
+            ydl_opts['cookiesfrombrowser'] = (cookies_from_browser,)
+        if cookies_from_browser:
+            ydl_opts['cookiesfrombrowser'] = (cookies_from_browser,)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
             ext = info.get('ext', 'mp4')
