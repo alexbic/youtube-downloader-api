@@ -10,8 +10,21 @@ import threading
 from functools import wraps
 from typing import Dict, Any
 
-logging.basicConfig(level=logging.INFO)
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
+try:
+    _log_level = getattr(logging, LOG_LEVEL, logging.INFO)
+except Exception:
+    _log_level = logging.INFO
+logging.basicConfig(level=_log_level)
 logger = logging.getLogger("yt-dlp-api")
+
+# Управление логированием прогресса скачивания
+PROGRESS_LOG_MODE = os.getenv('PROGRESS_LOG', os.getenv('YTDLP_PROGRESS_LOG', 'off')).strip().lower()
+if PROGRESS_LOG_MODE not in ('off', 'compact', 'full'):
+    PROGRESS_LOG_MODE = 'off'
+PROGRESS_STEP = int(os.getenv('PROGRESS_STEP', 10))  # шаг, % для compact режима
+LOG_YTDLP_OPTS = os.getenv('LOG_YTDLP_OPTS', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
+LOG_YTDLP_WARNINGS = os.getenv('LOG_YTDLP_WARNINGS', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
 
 API_KEY = os.getenv('API_KEY')
 PUBLIC_BASE_URL = os.getenv('PUBLIC_BASE_URL') or os.getenv('EXTERNAL_BASE_URL')
@@ -49,6 +62,7 @@ def log_startup_info():
         else:
             logger.info("Storage: memory (single-process)")
     logger.info(f"yt-dlp version: {get_yt_dlp_version()}")
+    logger.info(f"Logging: level={LOG_LEVEL}, progress_mode={PROGRESS_LOG_MODE}, step={PROGRESS_STEP}%")
     logger.info("=" * 60)
 
 def get_yt_dlp_version():
@@ -120,6 +134,76 @@ def build_internal_url(path: str, base: str | None = None) -> str:
     except Exception:
         pass
     return path
+
+# ============================================
+# LOGGING HELPERS FOR YT-DLP
+# ============================================
+
+class _QuietYTDLPLogger:
+    def debug(self, msg):
+        # yt-dlp спамит debug; подавляем полностью
+        pass
+    def warning(self, msg):
+        if LOG_YTDLP_WARNINGS:
+            logger.warning(f"yt-dlp: {msg}")
+    def error(self, msg):
+        logger.error(f"yt-dlp: {msg}")
+
+_last_progress_bucket: dict[str, int] = {}
+
+def _make_progress_hook(task_id: str, step: int = 10):
+    def hook(d):
+        try:
+            if d.get('status') != 'downloading':
+                return
+            percent = None
+            if d.get('_percent_str'):
+                # format like ' 81.2%'
+                s = d['_percent_str'].strip().rstrip('%')
+                percent = float(s)
+            else:
+                downloaded = d.get('downloaded_bytes') or 0
+                total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
+                if total:
+                    percent = (downloaded / total) * 100.0
+            if percent is None:
+                return
+            bucket = int(percent // max(1, step))
+            last = _last_progress_bucket.get(task_id, -1)
+            if bucket > last:
+                _last_progress_bucket[task_id] = bucket
+                logger.info(f"[{task_id[:8]}] progress: {min(100, int(percent))}%")
+        except Exception:
+            pass
+    return hook
+
+def _prepare_ydl_opts(task_id: str | None, video_url: str, quality: str, outtmpl: str, cookies_from_browser: str | None):
+    ydl_opts = {
+        'format': quality,
+        'outtmpl': outtmpl,
+        'no_warnings': True,
+    }
+    # Управление уровнем детализации
+    if PROGRESS_LOG_MODE == 'full':
+        ydl_opts['quiet'] = False
+        ydl_opts['noprogress'] = False
+    else:
+        ydl_opts['quiet'] = True
+        ydl_opts['noprogress'] = True
+        ydl_opts['logger'] = _QuietYTDLPLogger()
+        if PROGRESS_LOG_MODE == 'compact' and task_id:
+            ydl_opts['progress_hooks'] = [
+                _make_progress_hook(task_id, max(1, PROGRESS_STEP))
+            ]
+
+    if cookies_from_browser:
+        ydl_opts['cookiesfrombrowser'] = (cookies_from_browser,)
+    elif os.path.exists(COOKIES_PATH):
+        ydl_opts['cookiefile'] = COOKIES_PATH
+
+    if LOG_YTDLP_OPTS:
+        logger.info(f"yt-dlp opts for {video_url}: {ydl_opts}")
+    return ydl_opts
 
 # ============================================
 # DIRECTORIES & TASKS
@@ -443,13 +527,9 @@ def download_video():
         create_task_dirs(task_id)
         safe_filename = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         outtmpl = os.path.join(get_task_output_dir(task_id), f'{safe_filename}.%(ext)s')
-        ydl_opts = {'format': quality,'outtmpl': outtmpl,'quiet': True,'no_warnings': True}
-        if cookies_from_browser:
-            ydl_opts['cookiesfrombrowser'] = (cookies_from_browser,)
-        elif os.path.exists(COOKIES_PATH):
-            ydl_opts['cookiefile'] = COOKIES_PATH
-        
-        logger.info(f"[sync] yt-dlp opts for {video_url}: {ydl_opts}")
+        ydl_opts = _prepare_ydl_opts(task_id, video_url, quality, outtmpl, cookies_from_browser)
+        if LOG_YTDLP_OPTS:
+            logger.info(f"[sync] yt-dlp opts for {video_url}: {ydl_opts}")
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(video_url, download=True)
@@ -635,18 +715,9 @@ def _background_download(
         update_task(task_id, {"status": "downloading"})
         safe_filename = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         outtmpl = os.path.join(get_task_output_dir(task_id), f"{safe_filename}.%(ext)s")
-        ydl_opts = {
-            'format': quality,
-            'outtmpl': outtmpl,
-            'quiet': True,
-            'no_warnings': True
-        }
-        if cookies_from_browser:
-            ydl_opts['cookiesfrombrowser'] = (cookies_from_browser,)
-        elif os.path.exists(COOKIES_PATH):
-            ydl_opts['cookiefile'] = COOKIES_PATH
-
-        logger.info(f"[async] yt-dlp opts for {video_url}: {ydl_opts}")
+        ydl_opts = _prepare_ydl_opts(task_id, video_url, quality, outtmpl, cookies_from_browser)
+        if LOG_YTDLP_OPTS:
+            logger.info(f"[async] yt-dlp opts for {video_url}: {ydl_opts}")
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
