@@ -1,6 +1,12 @@
 version: '3.8'
 
 services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
   youtube-downloader:
     image: alexbic/youtube-downloader-api:latest
     # или используйте GitHub Container Registry:
@@ -13,9 +19,27 @@ services:
       # Примонтируйте cookies.txt если нужно обойти защиту YouTube
       # - ./cookies.txt:/app/cookies.txt
     environment:
-      # Опционально: установите API-ключ для защиты эндпоинтов
-      # - YTDL_API_KEY=your-secret-key-here
-      - MAX_CLIENT_META_BYTES=16384
-      - MAX_CLIENT_META_DEPTH=5
-      - MAX_CLIENT_META_KEYS=200
+      # Public base URL for generating absolute download links (no trailing slash)
+      # Example for reverse-proxy on a subpath:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      # API Key for authentication (Bearer token)
+      # If not set, API will work without authentication (not recommended for production)
+      # Generate secure key: openssl rand -hex 32
+      API_KEY: ${API_KEY}
+
+      # Redis configuration (enable multi-worker mode)
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0  # По умолчанию DB 0; если делите Redis с видеопроцессором — смените на 1
+
+      # Gunicorn workers / timeout
+      WORKERS: 2  # Can use 2+ workers with Redis
+      GUNICORN_TIMEOUT: 600
+
+      # client_meta limits
+      MAX_CLIENT_META_BYTES: 16384
+      MAX_CLIENT_META_DEPTH: 5
+      MAX_CLIENT_META_KEYS: 200
     restart: unless-stopped
+    depends_on:
+      - redis

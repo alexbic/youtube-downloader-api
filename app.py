@@ -8,27 +8,28 @@ from datetime import datetime
 import uuid
 import threading
 from functools import wraps
+from typing import Dict, Any
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("yt-dlp-api")
 
-API_KEY = os.getenv('YTDL_API_KEY')
-API_KEY_ENABLED = bool(API_KEY)
+API_KEY = os.getenv('API_KEY')
+PUBLIC_BASE_URL = os.getenv('PUBLIC_BASE_URL') or os.getenv('EXTERNAL_BASE_URL')
+# Авторизация требуется только если указан внешний URL и задан ключ
+AUTH_REQUIRED = bool(PUBLIC_BASE_URL) and bool(API_KEY)
 
 def log_startup_info():
-    public_url = os.getenv('PUBLIC_BASE_URL') or os.getenv('EXTERNAL_BASE_URL')
+    public_url = PUBLIC_BASE_URL
     logger.info("=" * 60)
     logger.info("YouTube Downloader API starting...")
-    logger.info(f"Auth: {'ENABLED' if API_KEY_ENABLED else 'DISABLED'} (YTDL_API_KEY)")
-    if API_KEY_ENABLED and public_url:
+    logger.info(f"Auth: {'REQUIRED' if AUTH_REQUIRED else 'DISABLED'} (depends on PUBLIC_BASE_URL & API_KEY)")
+    if public_url and API_KEY:
         logger.info("Mode: PUBLIC API with external URLs")
         logger.info(f"Base URL: {public_url}")
-    elif API_KEY_ENABLED:
-        logger.info("Mode: PUBLIC API with internal URLs")
     else:
         logger.info("Mode: INTERNAL (Docker network)")
-        if public_url:
-            logger.warning("WARNING: PUBLIC_BASE_URL is set but YTDL_API_KEY is not! PUBLIC_BASE_URL will be IGNORED: %s", public_url)
+        if public_url and not API_KEY:
+            logger.warning("WARNING: PUBLIC_BASE_URL is set but API_KEY is not! PUBLIC access is DISABLED. Using internal URLs.")
     # Некоторые константы могут быть ещё не определены при импорте — проверяем наличие
     if 'DOWNLOAD_DIR' in globals():
         logger.info(f"Downloads dir: {DOWNLOAD_DIR}")
@@ -38,6 +39,11 @@ def log_startup_info():
         logger.info(f"Cookies file: {COOKIES_PATH} {'(exists)' if os.path.exists(COOKIES_PATH) else '(not found)'}")
     if 'MAX_CLIENT_META_BYTES' in globals():
         logger.info(f"client_meta limits: bytes={MAX_CLIENT_META_BYTES}, depth={MAX_CLIENT_META_DEPTH}, keys={MAX_CLIENT_META_KEYS}, str_len={MAX_CLIENT_META_STRING_LENGTH}, list_len={MAX_CLIENT_META_LIST_LENGTH}")
+    if 'STORAGE_MODE' in globals():
+        if STORAGE_MODE == 'redis' and 'REDIS_HOST' in globals():
+            logger.info(f"Storage: redis ({REDIS_HOST}:{REDIS_PORT}/db{REDIS_DB})")
+        else:
+            logger.info("Storage: memory (single-process)")
     logger.info(f"yt-dlp version: {get_yt_dlp_version()}")
     logger.info("=" * 60)
 
@@ -56,15 +62,40 @@ app = Flask(__name__)
 def require_api_key(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        if not API_KEY_ENABLED:
+        if not AUTH_REQUIRED:
             return f(*args, **kwargs)
-        provided = request.headers.get('X-API-Key')
-        if not provided:
-            return jsonify({"error": "Missing X-API-Key"}), 401
-        if provided != API_KEY:
+        # Primary: Authorization: Bearer <token>
+        auth_header = request.headers.get('Authorization', '')
+        token = None
+        if auth_header.lower().startswith('bearer '):
+            token = auth_header.split(' ', 1)[1].strip()
+        # Backward-compat: X-API-Key
+        if not token:
+            token = request.headers.get('X-API-Key')
+        if not token:
+            return jsonify({"error": "Missing Authorization Bearer token or X-API-Key"}), 401
+        if token != API_KEY:
             return jsonify({"error": "Invalid API key"}), 403
         return f(*args, **kwargs)
     return decorated
+
+# ============================================
+# URL HELPERS
+# ============================================
+def _join_url(base: str, path: str) -> str:
+    if not base:
+        return path
+    return f"{base.rstrip('/')}/{path.lstrip('/')}"
+
+def build_absolute_url(path: str) -> str:
+    try:
+        if PUBLIC_BASE_URL and API_KEY:
+            return _join_url(PUBLIC_BASE_URL, path)
+        if request and hasattr(request, 'host_url') and request.host_url:
+            return _join_url(request.host_url, path)
+    except Exception:
+        pass
+    return path
 
 # ============================================
 # DIRECTORIES & TASKS
@@ -92,12 +123,50 @@ def save_task_metadata(task_id: str, metadata: dict):
     with open(meta_path, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
 
-# In-memory tasks
-tasks_store = {}
+# ============================================
+# TASK STORAGE (Redis or Memory)
+# ============================================
+STORAGE_MODE = "memory"
+tasks_store: Dict[str, Dict[str, Any]] = {}
+redis_client = None
+REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
+REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+REDIS_DB = int(os.getenv('REDIS_DB', 0))
+
+try:
+    import redis  # type: ignore
+    redis_client = redis.Redis(
+        host=REDIS_HOST,
+        port=REDIS_PORT,
+        db=REDIS_DB,
+        decode_responses=True,
+        socket_connect_timeout=2,
+        socket_timeout=2
+    )
+    redis_client.ping()
+    STORAGE_MODE = "redis"
+except Exception:
+    redis_client = None
+    STORAGE_MODE = "memory"
+
 def save_task(task_id: str, data: dict):
+    if STORAGE_MODE == "redis" and redis_client is not None:
+        try:
+            redis_client.setex(f"task:{task_id}", 86400, json.dumps(data, ensure_ascii=False))
+            return
+        except Exception:
+            pass
     tasks_store[task_id] = data
+
 def get_task(task_id: str):
+    if STORAGE_MODE == "redis" and redis_client is not None:
+        try:
+            data = redis_client.get(f"task:{task_id}")
+            return json.loads(data) if data else None
+        except Exception:
+            return tasks_store.get(task_id)
     return tasks_store.get(task_id)
+
 def update_task(task_id: str, updates: dict):
     t = get_task(task_id)
     if t:
@@ -244,7 +313,12 @@ def cleanup_old_files():
 # ============================================
 @app.route('/health', methods=['GET'])
 def health_check():
-    return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat(), "auth": "enabled" if API_KEY_ENABLED else "disabled"})
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "auth": "enabled" if AUTH_REQUIRED else "disabled",
+        "storage": STORAGE_MODE
+    })
 
 # ============================================
 # GET DIRECT URL
@@ -357,8 +431,7 @@ def download_video():
                 os.chmod(file_path, 0o644)
                 file_size = os.path.getsize(file_path)
                 download_path = f"/download_file/{filename}"  # legacy path
-                base_url = request.host_url.rstrip('/')
-                full_download_url = f"{base_url}{download_path}"
+                full_download_url = build_absolute_url(download_path)
                 task_download_path = build_download_path(task_id, filename)
                 metadata = {
                     "task_id": task_id,
@@ -491,8 +564,7 @@ def download_direct():
                 os.chmod(file_path, 0o644)
                 file_size = os.path.getsize(file_path)
                 download_path = f"/download_file/{filename}"  # legacy
-                base_url = request.host_url.rstrip('/')
-                full_download_url = f"{base_url}{download_path}"
+                full_download_url = build_absolute_url(download_path)
                 task_download_path = build_download_path(task_id, filename)
                 metadata = {
                     "task_id": task_id,
@@ -618,7 +690,7 @@ def _background_download(task_id: str, video_url: str, quality: str, client_meta
                 os.chmod(file_path, 0o644)
                 file_size = os.path.getsize(file_path)
                 download_path = f"/download_file/{filename}"
-                full_download_url = f"{base_url}{download_path}" if base_url else download_path
+                full_download_url = build_absolute_url(download_path)
                 task_download_path = build_download_path(task_id, filename)
                 update_task(task_id, {
                     "status": "completed",

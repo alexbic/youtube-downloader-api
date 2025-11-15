@@ -77,6 +77,30 @@ services:
       - "5000:5000"
     volumes:
       - ./downloads:/app/downloads
+      # - ./cookies.txt:/app/cookies.txt  # при необходимости
+    environment:
+      # Public base URL for generating absolute download links (no trailing slash)
+      # Example for reverse-proxy on a subpath:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      # API Key for authentication (Bearer token)
+      # If not set, API will work without authentication (not recommended for production)
+      # Generate secure key: openssl rand -hex 32
+      API_KEY: ${API_KEY}
+
+      # Redis configuration (enable multi-worker mode)
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0  # По умолчанию DB 0; если делите Redis с видеопроцессором — смените на 1
+
+      # Gunicorn workers / timeout
+      WORKERS: 2  # Can use 2+ workers with Redis
+      GUNICORN_TIMEOUT: 600
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
     restart: unless-stopped
 ```
 
@@ -88,11 +112,13 @@ services:
 GET /health
 ```
 
-Ответ:
+Ответ (поля могут отличаться в зависимости от конфигурации):
 ```json
 {
   "status": "healthy",
-  "timestamp": "2024-01-15T10:30:00.123456"
+  "timestamp": "2024-01-15T10:30:00.123456",
+  "auth": "enabled|disabled",
+  "storage": "redis|memory"
 }
 ```
 
@@ -128,6 +154,9 @@ Content-Type: application/json
 - `quality` (опциональный, string) — формат yt-dlp, по умолчанию `best[height<=720]`
 - `cookiesFromBrowser` (опциональный, string) — браузер для извлечения cookies (`chrome`, `firefox`, `safari`, `edge`; работает только локально, не в Docker)
 - `client_meta` (опциональный, object) — любые ваши метаданные; сохраняются в `metadata.json` и возвращаются в ответе
+
+Аутентификация, если включена (см. PUBLIC_BASE_URL + API_KEY): используйте заголовок
+`Authorization: Bearer <API_KEY>` (или совместимый `X-API-Key`).
 
 
 #### Пример ответа (sync):
@@ -242,7 +271,7 @@ Content-Type: application/json
 
 **Важно:** Прямые ссылки имеют ограниченный срок действия и могут выдать 403 Forbidden при скачивании. Для гарантированного скачивания используйте `/download_direct` или `/download_video`.
 
-### 3. Скачать видео напрямую (рекомендуется для n8n)
+### 6. Скачать видео напрямую (рекомендуется для n8n)
 
 ```bash
 POST /download_direct
@@ -326,7 +355,7 @@ Binary Property: data
 
 API автоматически вернёт полный URL с правильным хостом (например: `http://youtube_downloader:5000/download_file/video_20240115_103000.mp4`)
 
-### 5. Скачать видео на сервер
+### 7. Скачать видео на сервер
 
 ```bash
 POST /download_video
@@ -366,7 +395,7 @@ Content-Type: application/json
 }
 ```
 
-### 6. Скачать файл с сервера
+### 8. Скачать файл с сервера
 
 ```bash
 GET /download_file/<filename>
@@ -376,7 +405,7 @@ GET /download_file/<filename>
 
 **Примечание**: `/download_file/` - это API endpoint (URL), а `/app/downloads/` - физический путь к файлам внутри Docker контейнера.
 
-### 7. Получить информацию о видео
+### 9. Получить информацию о видео
 
 ```bash
 POST /get_video_info
@@ -422,19 +451,27 @@ Content-Type: application/json
 ### cURL
 
 ```bash
-# Получить прямую ссылку
+# Получить прямую ссылку (без auth)
 curl -X POST http://localhost:5000/get_direct_url \
   -H "Content-Type: application/json" \
+  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
+
+# То же с включенной auth (Bearer)
+curl -X POST http://localhost:5000/get_direct_url \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
   -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
 
 # Скачать видео
 curl -X POST http://localhost:5000/download_video \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
   -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "quality": "best[height<=480]"}'
 
 # Получить информацию
 curl -X POST http://localhost:5000/get_video_info \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
   -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
 ```
 
@@ -522,6 +559,13 @@ python app.py
 - Gunicorn
 - Docker
 
+## Конфигурация и аутентификация
+
+- `PUBLIC_BASE_URL`: если задан вместе с `API_KEY`, API включает аутентификацию и будет возвращать абсолютные ссылки на скачивание, используя этот базовый URL.
+- `API_KEY`: секретный ключ. Используйте заголовок `Authorization: Bearer <API_KEY>` (поддерживается и `X-API-Key`).
+- `WORKERS`: число воркеров Gunicorn. Для 2+ воркеров рекомендуется Redis.
+- `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`: конфигурация Redis. По умолчанию используется DB 0. Если вы делите один Redis с другим сервисом (например, видеопроцессор использует DB 0), задайте отдельную DB (например, 1).
+
 ## Troubleshooting для n8n
 
 ### Ошибка: "Cannot create a string longer than 0x1fffffe8 characters"
@@ -595,7 +639,6 @@ MIT License
 
 ## TODO
 
-- [ ] Добавить аутентификацию
 - [ ] Добавить rate limiting
 - [ ] Добавить очистку старых файлов
 - [ ] Добавить поддержку плейлистов

@@ -20,4 +20,6 @@ RUN mkdir -p /app/downloads
 
 EXPOSE 5000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "300", "app:app"]
+# Настройка воркеров/таймаутов через переменные окружения
+# WORKERS (default: 1), GUNICORN_TIMEOUT (default: 300)
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:5000 --workers ${WORKERS:-1} --timeout ${GUNICORN_TIMEOUT:-300} app:app"]
