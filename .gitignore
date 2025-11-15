@@ -43,6 +43,10 @@ Thumbs.db
 
 # Application specific
 downloads/
+tasks/
+tools/
+tools/**
+!/tools/README.md
 *.mp4
 *.mp3
 *.webm

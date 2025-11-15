@@ -3,6 +3,7 @@ import os
 import json
 import logging
 from flask import Flask, request, jsonify, send_file
+import requests
 import yt_dlp
 from datetime import datetime
 import uuid
@@ -78,6 +79,13 @@ def get_yt_dlp_version():
         return 'unknown'
 
 app = Flask(__name__)
+# Отключаем сортировку ключей в JSON, чтобы сохранить порядок вставки
+try:
+    app.config['JSON_SORT_KEYS'] = False
+    if hasattr(app, 'json') and hasattr(app.json, 'sort_keys'):
+        app.json.sort_keys = False  # Flask 2.3+/3.0 JSON provider
+except Exception:
+    pass
 
 # ============================================
 # AUTH CONFIG
@@ -214,10 +222,8 @@ def _prepare_ydl_opts(task_id: str | None, video_url: str, quality: str, outtmpl
 # ============================================
 # DIRECTORIES & TASKS
 # ============================================
-DOWNLOAD_DIR = "/app/downloads"
 TASKS_DIR = "/app/tasks"
 COOKIES_PATH = "/app/cookies.txt"
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(TASKS_DIR, exist_ok=True)
 
 def get_task_dir(task_id: str) -> str:
@@ -229,10 +235,13 @@ def get_task_output_dir(task_id: str) -> str:
 def create_task_dirs(task_id: str):
     os.makedirs(get_task_output_dir(task_id), exist_ok=True)
 
-def build_download_path(task_id: str, filename: str) -> str:
+def build_download_endpoint(task_id: str, filename: str) -> str:
     return f"/download/{task_id}/output/{filename}"
 
-def save_task_metadata(task_id: str, metadata: dict):
+def build_storage_rel_path(task_id: str, filename: str) -> str:
+    return f"{task_id}/output/{filename}"
+
+def save_task_metadata(task_id: str, metadata: Any):
     meta_path = os.path.join(get_task_dir(task_id), "metadata.json")
     with open(meta_path, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
@@ -414,10 +423,6 @@ def cleanup_old_files():
     now = time.time()
     ttl = CLEANUP_TTL_SECONDS
     try:
-        for filename in os.listdir(DOWNLOAD_DIR):
-            fp = os.path.join(DOWNLOAD_DIR, filename)
-            if os.path.isfile(fp) and now - os.path.getmtime(fp) > ttl:
-                os.remove(fp)
         for task_id in os.listdir(TASKS_DIR):
             tdir = os.path.join(TASKS_DIR, task_id)
             if os.path.isdir(tdir) and now - os.path.getmtime(tdir) > ttl:
@@ -484,6 +489,16 @@ def download_video():
         video_url = data.get('url')
         quality = data.get('quality', 'best[height<=720]')
         cookies_from_browser = data.get('cookiesFromBrowser')
+        # webhook для async режима
+        webhook_url = data.get('webhook_url') or data.get('webhook') or data.get('callback_url')
+        if webhook_url is not None:
+            try:
+                if not isinstance(webhook_url, str) or not webhook_url.lower().startswith(("http://", "https://")):
+                    return jsonify({"error": "Invalid webhook_url (must start with http(s)://)"}), 400
+                if len(webhook_url) > 2048:
+                    return jsonify({"error": "Invalid webhook_url (too long)"}), 400
+            except Exception:
+                return jsonify({"error": "Invalid webhook_url"}), 400
         client_meta = data.get('client_meta') or data.get('meta')
         if isinstance(client_meta, str):
             try:
@@ -511,28 +526,39 @@ def download_video():
                 "video_url": video_url,
                 "quality": quality,
                 "cookies_from_browser": cookies_from_browser,
-                "client_meta": client_meta
+                "client_meta": client_meta,
+                "webhook_url": webhook_url
             }
             save_task(task_id, task_data)
             link_base_external = (PUBLIC_BASE_URL if (PUBLIC_BASE_URL and API_KEY) else None)
             link_base_internal = (INTERNAL_BASE_URL or (request.host_url.rstrip('/') if request and hasattr(request, 'host_url') else None))
-            thread = threading.Thread(target=_background_download, args=(task_id, video_url, quality, client_meta, "download_video_async", link_base_external or "", link_base_internal or "", cookies_from_browser))
+            thread = threading.Thread(target=_background_download, args=(task_id, video_url, quality, client_meta, "download_video_async", link_base_external or "", link_base_internal or "", cookies_from_browser, webhook_url))
             thread.daemon = True
             thread.start()
-            # В async-режиме всегда возвращаем только task_id и статус, ошибки — только через /task_status
-            task_download_path = f"/download/{task_id}/output/pending"
-            return jsonify({
-                "task_id": task_id,
-                "status": "processing",
-                "check_status_url": build_absolute_url(f"/task_status/{task_id}", link_base_external),
-                "check_status_url_internal": build_internal_url(f"/task_status/{task_id}", link_base_internal),
-                "metadata_url": build_absolute_url(f"/download/{task_id}/metadata.json", link_base_external),
-                "metadata_url_internal": build_internal_url(f"/download/{task_id}/metadata.json", link_base_internal),
-                "client_meta": client_meta
-            }), 202
+            # Только internal, если нет внешнего контура; иначе обе
+            if PUBLIC_BASE_URL and API_KEY:
+                resp_async = {
+                    "task_id": task_id,
+                    "status": "processing",
+                    "check_status_url": build_absolute_url(f"/task_status/{task_id}", link_base_external),
+                    "metadata_url": build_absolute_url(f"/download/{task_id}/metadata.json", link_base_external),
+                    "check_status_url_internal": build_internal_url(f"/task_status/{task_id}", link_base_internal),
+                    "metadata_url_internal": build_internal_url(f"/download/{task_id}/metadata.json", link_base_internal),
+                    "client_meta": client_meta
+                }
+            else:
+                resp_async = {
+                    "task_id": task_id,
+                    "status": "processing",
+                    "check_status_url_internal": build_internal_url(f"/task_status/{task_id}", link_base_internal),
+                    "metadata_url_internal": build_internal_url(f"/download/{task_id}/metadata.json", link_base_internal),
+                    "client_meta": client_meta
+                }
+            return jsonify(resp_async), 202
 
         # Sync mode: download immediately and return result
         task_id = str(uuid.uuid4())
+        created_at_iso = datetime.now().isoformat()
         create_task_dirs(task_id)
         safe_filename = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         outtmpl = os.path.join(get_task_output_dir(task_id), f'{safe_filename}.%(ext)s')
@@ -548,44 +574,62 @@ def download_video():
             if os.path.exists(file_path):
                 os.chmod(file_path, 0o644)
                 file_size = os.path.getsize(file_path)
-                task_download_path = build_download_path(task_id, filename)
-                task_download_url = build_absolute_url(task_download_path)
-                task_download_url_internal = build_internal_url(task_download_path)
-                metadata = {
+                download_endpoint = build_download_endpoint(task_id, filename)
+                task_download_url = build_absolute_url(download_endpoint)
+                task_download_url_internal = build_internal_url(download_endpoint)
+                completed_at_iso = datetime.now().isoformat()
+                storage_rel_path = build_storage_rel_path(task_id, filename)
+                # Метафайл как массив из одного объекта, по требуемому формату
+                meta_item = {
                     "task_id": task_id,
                     "status": "completed",
-                    "mode": "sync",
-                    "operation": "download_video",
                     "video_id": info.get('id'),
                     "title": info.get('title'),
                     "filename": filename,
-                    "file_size": file_size,
+                    "download_endpoint": download_endpoint,
+                    "storage_rel_path": storage_rel_path,
                     "duration": info.get('duration'),
                     "resolution": info.get('resolution'),
                     "ext": ext,
-                    "completed_at": datetime.now().isoformat()
+                    "created_at": created_at_iso,
+                    "completed_at": completed_at_iso
                 }
+                if PUBLIC_BASE_URL and API_KEY:
+                    meta_item["task_download_url"] = task_download_url
+                    meta_item["metadata_url"] = build_absolute_url(f"/download/{task_id}/metadata.json")
+                    meta_item["task_download_url_internal"] = task_download_url_internal
+                    meta_item["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json")
+                else:
+                    meta_item["task_download_url_internal"] = task_download_url_internal
+                    meta_item["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json")
                 if client_meta is not None:
-                    metadata['client_meta'] = client_meta
-                save_task_metadata(task_id, metadata)
-                return jsonify({
+                    meta_item["client_meta"] = client_meta
+                save_task_metadata(task_id, [meta_item])
+                resp_sync = {
                     "task_id": task_id,
                     "status": "completed",
                     "video_id": info.get('id'),
                     "title": info.get('title'),
                     "filename": filename,
                     "file_size": file_size,
-                    "task_download_path": task_download_path,
-                    "task_download_url": task_download_url,
-                    "task_download_url_internal": task_download_url_internal,
-                    "metadata_url": build_absolute_url(f"/download/{task_id}/metadata.json"),
-                    "metadata_url_internal": build_internal_url(f"/download/{task_id}/metadata.json"),
+                    "download_endpoint": download_endpoint,
+                    "storage_rel_path": storage_rel_path,
                     "duration": info.get('duration'),
                     "resolution": info.get('resolution'),
                     "ext": ext,
-                    "client_meta": client_meta,
-                    "processed_at": metadata['completed_at']
-                })
+                    "created_at": created_at_iso,
+                    "processed_at": completed_at_iso
+                }
+                if PUBLIC_BASE_URL and API_KEY:
+                    resp_sync["task_download_url"] = task_download_url
+                    resp_sync["metadata_url"] = build_absolute_url(f"/download/{task_id}/metadata.json")
+                    resp_sync["task_download_url_internal"] = task_download_url_internal
+                    resp_sync["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json")
+                else:
+                    resp_sync["task_download_url_internal"] = task_download_url_internal
+                    resp_sync["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json")
+                resp_sync["client_meta"] = client_meta
+                return jsonify(resp_sync)
             return jsonify({"error": "No file downloaded"}), 500
         except Exception as e:
             error_info = classify_youtube_error(str(e))
@@ -612,19 +656,6 @@ def download_video():
                 "metadata_url": f"/download/{task_id}/metadata.json",
                 "client_meta": client_meta
             }), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ============================================
-# LEGACY DOWNLOAD FILE (root)
-# ============================================
-@app.route('/download_file/<filename>', methods=['GET'])
-def download_file(filename):
-    try:
-        fp = os.path.join(DOWNLOAD_DIR, filename)
-        if os.path.exists(fp):
-            return send_file(fp, as_attachment=True)
-        return jsonify({"error": "File not found"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -685,29 +716,38 @@ def task_status(task_id):
     if not task:
         return jsonify({"error": "Task not found"}), 404
     resp = {"task_id": task_id, "status": task.get('status'), "created_at": task.get('created_at')}
-    if task.get('client_meta') is not None:
-        resp['client_meta'] = task['client_meta']
     if task.get('status') == 'completed':
-        resp.update({
+        endpoint = build_download_endpoint(task_id, task.get('filename')) if task.get('filename') else None
+        resp_update = {
             "video_id": task.get('video_id'),
             "title": task.get('title'),
             "filename": task.get('filename'),
-            "task_download_path": task.get('task_download_path'),
-            "task_download_url": build_absolute_url(task.get('task_download_path')) if task.get('task_download_path') else None,
-            "task_download_url_internal": build_internal_url(task.get('task_download_path')) if task.get('task_download_path') else None,
-            "metadata_url": build_absolute_url(f"/download/{task_id}/metadata.json"),
-            "metadata_url_internal": build_internal_url(f"/download/{task_id}/metadata.json"),
+            "download_endpoint": endpoint,
+            "storage_rel_path": build_storage_rel_path(task_id, task.get('filename')) if task.get('filename') else None,
             "duration": task.get('duration'),
             "resolution": task.get('resolution'),
             "ext": task.get('ext'),
             "completed_at": task.get('completed_at')
-        })
-    elif task.get('status') == 'error':
+        }
+        if endpoint:
+            if PUBLIC_BASE_URL and API_KEY:
+                resp_update["task_download_url"] = _join_url(PUBLIC_BASE_URL, endpoint)
+                resp_update["metadata_url"] = _join_url(PUBLIC_BASE_URL, f"/download/{task_id}/metadata.json")
+                resp_update["task_download_url_internal"] = build_internal_url(endpoint)
+                resp_update["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json")
+            else:
+                resp_update["task_download_url_internal"] = build_internal_url(endpoint)
+                resp_update["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json")
+        resp.update(resp_update)
+    if task.get('status') == 'error':
         resp['error_type'] = task.get('error_type', 'unknown')
         resp['error_message'] = task.get('error_message', task.get('error', 'Unknown error'))
         resp['user_action'] = task.get('user_action', 'Review error manually')
         if task.get('raw_error'):
             resp['raw_error'] = task.get('raw_error')
+    # Добавляем client_meta строго последним, если присутствует
+    if task.get('client_meta') is not None:
+        resp['client_meta'] = task['client_meta']
     return jsonify(resp)
 
 def _background_download(
@@ -718,8 +758,19 @@ def _background_download(
     operation: str = "download_video_async",
     base_url_external: str = "",
     base_url_internal: str = "",
-    cookies_from_browser: str = None
+    cookies_from_browser: str = None,
+    webhook_url: str | None = None
 ):
+    def _post_webhook(payload: dict):
+        if not webhook_url:
+            return
+        try:
+            headers = {"Content-Type": "application/json"}
+            requests.post(webhook_url, headers=headers, data=json.dumps(payload, ensure_ascii=False), timeout=8)
+        except Exception:
+            # не прерываем основной поток задач из-за вебхука
+            pass
+
     try:
         update_task(task_id, {"status": "downloading"})
         safe_filename = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -737,11 +788,21 @@ def _background_download(
         if os.path.exists(file_path):
             os.chmod(file_path, 0o644)
             file_size = os.path.getsize(file_path)
-            task_download_path = build_download_path(task_id, filename)
-            full_task_download_url = build_absolute_url(task_download_path, base_url_external or None)
-            full_task_download_url_internal = build_internal_url(task_download_path, base_url_internal or None)
+            download_endpoint = build_download_endpoint(task_id, filename)
+            full_task_download_url = build_absolute_url(download_endpoint, base_url_external or None)
+            full_task_download_url_internal = build_internal_url(download_endpoint, base_url_internal or None)
+            completed_at_iso = datetime.now().isoformat()
+            # created_at из сохранённой задачи, если есть
+            created_at_iso = None
+            try:
+                t = get_task(task_id)
+                if t and t.get('created_at'):
+                    created_at_iso = t.get('created_at')
+            except Exception:
+                created_at_iso = None
+            storage_rel_path = build_storage_rel_path(task_id, filename)
 
-            update_task(task_id, {
+            updates = {
                 "status": "completed",
                 "video_id": info.get('id'),
                 "title": info.get('title'),
@@ -749,29 +810,67 @@ def _background_download(
                 "duration": info.get('duration'),
                 "resolution": info.get('resolution'),
                 "ext": ext,
-                "task_download_path": task_download_path,
-                "task_download_url": full_task_download_url,
-                "task_download_url_internal": full_task_download_url_internal,
-                "completed_at": datetime.now().isoformat()
-            })
-
-            metadata = {
+                "completed_at": completed_at_iso
+            }
+            if base_url_external:
+                updates["task_download_url"] = full_task_download_url
+                updates["task_download_url_internal"] = full_task_download_url_internal
+            else:
+                updates["task_download_url_internal"] = full_task_download_url_internal
+            update_task(task_id, updates)
+            # Метафайл как массив из одного объекта, по требуемому формату
+            meta_item = {
                 "task_id": task_id,
                 "status": "completed",
-                "operation": operation,
                 "video_id": info.get('id'),
-                "file_size": file_size,
-                "task_download_url": full_task_download_url,
-                "task_download_url_internal": full_task_download_url_internal,
-                "metadata_url": build_absolute_url(f"/download/{task_id}/metadata.json", base_url_external or None),
+                "title": info.get('title'),
+                "filename": filename,
+                "download_endpoint": download_endpoint,
+                "storage_rel_path": storage_rel_path,
                 "duration": info.get('duration'),
                 "resolution": info.get('resolution'),
                 "ext": ext,
-                "completed_at": datetime.now().isoformat()
+                "created_at": created_at_iso,
+                "completed_at": completed_at_iso
             }
+            if base_url_external:
+                meta_item["task_download_url"] = full_task_download_url
+                meta_item["metadata_url"] = build_absolute_url(f"/download/{task_id}/metadata.json", base_url_external)
+                meta_item["task_download_url_internal"] = full_task_download_url_internal
+                meta_item["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json", base_url_internal or None)
+            else:
+                meta_item["task_download_url_internal"] = full_task_download_url_internal
+                meta_item["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json", base_url_internal or None)
             if client_meta is not None:
-                metadata['client_meta'] = client_meta
-            save_task_metadata(task_id, metadata)
+                meta_item["client_meta"] = client_meta
+            save_task_metadata(task_id, [meta_item])
+
+            # webhook payload (client_meta последним)
+            payload = {
+                "task_id": task_id,
+                "status": "completed",
+                "video_id": info.get('id'),
+                "title": info.get('title'),
+                "filename": filename,
+                "download_endpoint": download_endpoint,
+                "storage_rel_path": storage_rel_path,
+                "duration": info.get('duration'),
+                "resolution": info.get('resolution'),
+                "ext": ext,
+                "created_at": created_at_iso,
+                "completed_at": completed_at_iso
+            }
+            if base_url_external:
+                payload["task_download_url"] = full_task_download_url
+                payload["metadata_url"] = build_absolute_url(f"/download/{task_id}/metadata.json", base_url_external)
+                payload["task_download_url_internal"] = full_task_download_url_internal
+                payload["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json", base_url_internal or None)
+            else:
+                payload["task_download_url_internal"] = full_task_download_url_internal
+                payload["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json", base_url_internal or None)
+            if client_meta is not None:
+                payload["client_meta"] = client_meta
+            _post_webhook(payload)
         else:
             error_info = classify_youtube_error("File not downloaded")
             update_task(task_id, {
@@ -792,6 +891,19 @@ def _background_download(
             if client_meta is not None:
                 metadata['client_meta'] = client_meta
             save_task_metadata(task_id, metadata)
+            # webhook об ошибке
+            payload = {
+                "task_id": task_id,
+                "status": "error",
+                "operation": operation,
+                "error_type": error_info["error_type"],
+                "error_message": error_info["error_message"],
+                "user_action": error_info["user_action"],
+                "failed_at": datetime.now().isoformat()
+            }
+            if client_meta is not None:
+                payload['client_meta'] = client_meta
+            _post_webhook(payload)
     except Exception as e:
         error_info = classify_youtube_error(str(e))
         update_task(task_id, {
@@ -814,6 +926,20 @@ def _background_download(
         if client_meta is not None:
             metadata['client_meta'] = client_meta
         save_task_metadata(task_id, metadata)
+        # webhook об ошибке
+        payload = {
+            "task_id": task_id,
+            "status": "error",
+            "operation": operation,
+            "error_type": error_info["error_type"],
+            "error_message": error_info["error_message"],
+            "user_action": error_info["user_action"],
+            "raw_error": str(e)[:1000],
+            "failed_at": datetime.now().isoformat()
+        }
+        if client_meta is not None:
+            payload['client_meta'] = client_meta
+        _post_webhook(payload)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)

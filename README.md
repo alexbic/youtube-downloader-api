@@ -16,6 +16,11 @@
 - Автоматическая публикация на Docker Hub и GitHub Container Registry
 - Поддержка платформ: linux/amd64, linux/arm64
 - Абсолютные ссылки как для внешнего, так и для внутреннего контура
+- Поддержка webhook-уведомлений в async-режиме (POST на `webhook_url` по завершении)
+- Консервативный порядок ключей в JSON (поле `client_meta` всегда последним)
+- Гибкая конфигурация внутренних/внешних URL: `PUBLIC_BASE_URL`/`INTERNAL_BASE_URL`
+- Контролируемая очистка старых задач: `CLEANUP_TTL_SECONDS` (0 = отключено)
+- Опциональное хранилище задач в Redis; без Redis — in-memory
 
 ## Установка
 
@@ -77,7 +82,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./downloads:/app/downloads
+      - ./tasks:/app/tasks
       # - ./cookies.txt:/app/cookies.txt  # при необходимости
     environment:
       # Public base URL for generating absolute download links (no trailing slash)
@@ -106,6 +111,9 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_DB: 0  # По умолчанию DB 0; если делите Redis с видеопроцессором — смените на 1
+
+      # Cleanup TTL (seconds). 0 — не удалять задачи
+      CLEANUP_TTL_SECONDS: 3600
 
       # Gunicorn workers / timeout
       WORKERS: 2  # Can use 2+ workers with Redis
@@ -169,6 +177,7 @@ Content-Type: application/json
 - `quality` (опциональный, string) — формат yt-dlp, по умолчанию `best[height<=720]`
 - `cookiesFromBrowser` (опциональный, string) — браузер для извлечения cookies (`chrome`, `firefox`, `safari`, `edge`; работает только локально, не в Docker)
 - `client_meta` (опциональный, object) — любые ваши метаданные; сохраняются в `metadata.json` и возвращаются в ответе
+- `webhook_url` (опциональный, string) — URL (http/https) для callback в async-режиме; по завершении отправляется POST с JSON (см. раздел Webhook)
 
 Аутентификация, если включена (см. PUBLIC_BASE_URL + API_KEY): используйте заголовок
 `Authorization: Bearer <API_KEY>` (или совместимый `X-API-Key`).
@@ -183,10 +192,11 @@ Content-Type: application/json
   "title": "Название видео",
   "filename": "video_20251114_212811.mp4",
   "file_size": 15728640,
-  "task_download_path": "/download/ab12cd34.../output/video_20251114_212811.mp4",
-  "task_download_url": "http://localhost:5000/download/ab12cd34.../output/video_20251114_212811.mp4",
+  "download_endpoint": "/download/ab12cd34.../output/video_20251114_212811.mp4",
+  "storage_rel_path": "ab12cd34.../output/video_20251114_212811.mp4",
+  "task_download_url": "http://public.example.com/download/ab12cd34.../output/video_20251114_212811.mp4",
   "task_download_url_internal": "http://service.local:5000/download/ab12cd34.../output/video_20251114_212811.mp4",
-  "metadata_url": "/download/ab12cd34.../metadata.json",
+  "metadata_url": "http://public.example.com/download/ab12cd34.../metadata.json",
   "metadata_url_internal": "http://service.local:5000/download/ab12cd34.../metadata.json",
   "duration": 180,
   "resolution": "1280x720",
@@ -221,8 +231,10 @@ GET /task_status/<task_id>
 
 Ответ (варианты):
 - status=processing: `{ "task_id": "...", "status": "processing" }`
-- status=completed: включает поля `task_download_path`, `task_download_url`, `task_download_url_internal`, `metadata_url`, `metadata_url_internal`, а также медиа-поля (`filename`, `duration`, `resolution`, `ext`, `title`, `video_id`).
+- status=completed: включает поля `download_endpoint`, `storage_rel_path`, `task_download_url(_internal)`, `metadata_url(_internal)`, а также медиа-поля (`filename`, `duration`, `resolution`, `ext`, `title`, `video_id`, `created_at`, `completed_at`).
 - status=error: включает `error_type`, `error_message`, `user_action`, по возможности `raw_error`.
+
+Поле `client_meta` возвращается последним (сохраняется порядок ключей JSON).
 
 ### 4. Скачать результат или метаданные
 
@@ -231,7 +243,7 @@ GET /download/<task_id>/output/<file>
 GET /download/<task_id>/metadata.json
 ```
 
-### 5. Получить прямую ссылку на видео (старый endpoint)
+### 5. Получить прямую ссылку на видео
 
 ```bash
 POST /get_direct_url
@@ -303,9 +315,51 @@ services:
 
 API автоматически вернёт абсолютные URL. Для внутренних сценариев есть дублирующие поля `*_internal`.
 
-### 7. Legacy: download_file
+Про `client_meta` в n8n: передавайте объект/массив как есть (не строку). Если формируете через Expression — не заключайте выражение в кавычки, чтобы избежать `"[object Object]"`.
 
-Endpoint `/download_file/<filename>` сохранён для обратной совместимости, но не рекомендуется. Основной способ — task-based ссылки (`/download/<task_id>/output/<file>`).
+### 7. Webhook callbacks (async)
+
+Если в `POST /download_video` передан `webhook_url` (или алиасы `webhook`, `callback_url`), сервис по завершении задачи делает `POST` на указанный URL с `Content-Type: application/json`.
+
+Успешный payload (поля как в `task_status`, `client_meta` — последним):
+```json
+{
+  "task_id": "...",
+  "status": "completed",
+  "video_id": "...",
+  "title": "...",
+  "filename": "...mp4",
+  "download_endpoint": "/download/.../output/...mp4",
+  "storage_rel_path": ".../output/...mp4",
+  "duration": 213,
+  "resolution": "640x360",
+  "ext": "mp4",
+  "created_at": "2025-11-15T06:18:46.629918",
+  "completed_at": "2025-11-15T06:18:56.338989",
+  "task_download_url_internal": "http://service.local:5000/download/...",
+  "metadata_url_internal": "http://service.local:5000/download/.../metadata.json",
+  "client_meta": {"your":"meta"}
+}
+```
+
+Ошибка:
+```json
+{
+  "task_id": "...",
+  "status": "error",
+  "operation": "download_video_async",
+  "error_type": "private_video|unavailable|deleted|...",
+  "error_message": "...",
+  "user_action": "...",
+  "failed_at": "2025-11-15T06:20:00.000000",
+  "client_meta": {"your":"meta"}
+}
+```
+
+Технические детали:
+- `webhook_url` должен начинаться с http(s):// и быть короче 2048 символов
+- Таймаут на отправку: 8 секунд; ошибка доставки не влияет на основной процесс
+- Повторных попыток на стороне сервиса нет (best-effort)
 
 ### 8. Получить информацию о видео
 
@@ -429,8 +483,8 @@ getDirectUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ')
 ```bash
 git clone https://github.com/alexbic/youtube-downloader-api.git
 cd youtube-downloader-api
-docker build -t youtube-downloader-api .
-docker run -p 5000:5000 youtube-downloader-api
+docker build -t yt-dl-api:test .
+docker run -p 5000:5000 yt-dl-api:test
 ```
 
 ### Локальный запуск без Docker
@@ -463,20 +517,24 @@ python app.py
 
 ## Конфигурация и аутентификация
 
-- `PUBLIC_BASE_URL`: если задан вместе с `API_KEY`, API включает аутентификацию и возвращает абсолютные внешние ссылки по этому базовому URL. Если `PUBLIC_BASE_URL` задан без `API_KEY`, он игнорируется, режим считается внутренним (auth=disabled).
+- `PUBLIC_BASE_URL`: если задан вместе с `API_KEY`, API включает аутентификацию и возвращает абсолютные внешние ссылки по этому базовому URL. Если `PUBLIC_BASE_URL` задан без `API_KEY`, публичный режим не активируется (auth=disabled), ссылки будут внутренние.
 - `API_KEY`: секретный ключ. Используйте заголовок `Authorization: Bearer <API_KEY>` (поддерживается и `X-API-Key`).
 - `INTERNAL_BASE_URL`: опциональный базовый URL внутреннего контура (Docker/k8s). Если не задан, внутренние ссылки строятся от `request.host_url`.
+- `CLEANUP_TTL_SECONDS`: TTL в секундах для автоочистки старых задач в `/app/tasks` (0 — отключить очистку). По умолчанию 3600 сек.
 - `WORKERS`: число воркеров Gunicorn. Для 2+ воркеров рекомендуется Redis.
 - `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`: конфигурация Redis. По умолчанию используется DB 0. Если вы делите один Redis с другим сервисом (например, видеопроцессор использует DB 0), задайте отдельную DB (например, 1).
 
 ### Как строятся ссылки
-- В ответах возвращаются как минимум относительные пути `task_download_path`.
-- Абсолютные внешние ссылки: `task_download_url`, `metadata_url` (используют `PUBLIC_BASE_URL`, если он активен, иначе `request.host_url`).
-- Абсолютные внутренние ссылки: `task_download_url_internal`, `metadata_url_internal` (используют `INTERNAL_BASE_URL`, если задан; иначе `request.host_url`).
+- Относительный путь до файла: `download_endpoint` (HTTP endpoint) и `storage_rel_path` (относительный путь на диске)
+- Абсолютные внешние ссылки: `task_download_url`, `metadata_url` (используют `PUBLIC_BASE_URL` при активной auth)
+- Абсолютные внутренние ссылки: `task_download_url_internal`, `metadata_url_internal` (используют `INTERNAL_BASE_URL`, если задан; иначе `request.host_url`)
 
 ### Режимы
 - Internal (auth=disabled): без `API_KEY` и без активного `PUBLIC_BASE_URL`. Ссылки будут строиться от `request.host_url`.
 - Public (auth=enabled): `PUBLIC_BASE_URL` + `API_KEY` заданы. Возвращаются внешние и внутренние абсолютные URL.
+
+Дополнительно:
+- Порядок ключей JSON сохраняется, поле `client_meta` добавляется последним для удобства восприятия
 
 ## Quick Config
 
@@ -506,7 +564,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./downloads:/app/downloads
+      - ./tasks:/app/tasks
       # - ./cookies.txt:/app/cookies.txt  # при необходимости
     depends_on:
       - redis
@@ -523,7 +581,8 @@ Docker run пример:
 ```bash
 docker run -d -p 5000:5000 \
   -e PROGRESS_LOG=off -e LOG_LEVEL=INFO \
-  -v $(pwd)/downloads:/app/downloads \
+  -e CLEANUP_TTL_SECONDS=0 \
+  -v $(pwd)/tasks:/app/tasks \
   alexbic/youtube-downloader-api:latest
 ```
 
@@ -638,9 +697,8 @@ MIT License
 ## TODO
 
 - [ ] Добавить rate limiting
-- [ ] Добавить очистку старых файлов (частично реализовано)
+- [ ] Добавить ретраи для webhook-доставки
 - [ ] Добавить поддержку плейлистов
-- [ ] Добавить webhook уведомления
 - [ ] Добавить queue для больших загрузок
 
 ## Автор
