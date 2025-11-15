@@ -1,11 +1,45 @@
-from flask import Flask, request, jsonify, send_file
-import yt_dlp
+
 import os
 import json
+import logging
+from flask import Flask, request, jsonify, send_file
+import yt_dlp
 from datetime import datetime
 import uuid
 import threading
 from functools import wraps
+
+# Логирование
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("yt-dlp-api")
+def log_startup_info():
+    logger.info("=" * 60)
+    logger.info("YouTube Downloader API starting...")
+    logger.info(f"Auth: {'ENABLED' if API_KEY_ENABLED else 'DISABLED'} (YTDL_API_KEY)")
+    public_url = os.getenv('PUBLIC_BASE_URL') or os.getenv('EXTERNAL_BASE_URL')
+    if API_KEY_ENABLED and public_url:
+        logger.info(f"Mode: PUBLIC API with external URLs")
+        logger.info(f"Base URL: {public_url}")
+    elif API_KEY_ENABLED:
+        logger.info(f"Mode: PUBLIC API with internal URLs")
+    else:
+        logger.info(f"Mode: INTERNAL (Docker network)")
+        if public_url:
+            logger.warning("WARNING: PUBLIC_BASE_URL is set but YTDL_API_KEY is not! PUBLIC_BASE_URL will be IGNORED: %s", public_url)
+    logger.info(f"Downloads dir: {DOWNLOAD_DIR}")
+    logger.info(f"Tasks dir: {TASKS_DIR}")
+    logger.info(f"Cookies file: {COOKIES_PATH} {'(exists)' if os.path.exists(COOKIES_PATH) else '(not found)'}")
+    logger.info(f"client_meta limits: bytes={MAX_CLIENT_META_BYTES}, depth={MAX_CLIENT_META_DEPTH}, keys={MAX_CLIENT_META_KEYS}, str_len={MAX_CLIENT_META_STRING_LENGTH}, list_len={MAX_CLIENT_META_LIST_LENGTH}")
+    logger.info(f"yt-dlp version: {get_yt_dlp_version()}")
+    logger.info("=" * 60)
+
+def get_yt_dlp_version():
+    try:
+        return yt_dlp.version.__version__
+    except Exception:
+        return 'unknown'
+
+log_startup_info()
 
 app = Flask(__name__)
 
@@ -22,9 +56,9 @@ def require_api_key(f):
             return f(*args, **kwargs)
         provided = request.headers.get('X-API-Key')
         if not provided:
-            return jsonify({"success": False, "error": "Missing X-API-Key"}), 401
+            return jsonify({"error": "Missing X-API-Key"}), 401
         if provided != API_KEY:
-            return jsonify({"success": False, "error": "Invalid API key"}), 403
+            return jsonify({"error": "Invalid API key"}), 403
         return f(*args, **kwargs)
     return decorated
 
@@ -216,13 +250,12 @@ def get_direct_url():
         video_url = data.get('url')
         quality = data.get('quality', 'best[height<=720]')
         if not video_url:
-            return jsonify({"success": False, "error": "URL is required"}), 400
+            return jsonify({"error": "URL is required"}), 400
         ydl_opts = {'format': quality,'quiet': True,'no_warnings': True}
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
             http_headers = info.get('http_headers', {})
             return jsonify({
-                "success": True,
                 "video_id": info.get('id'),
                 "title": info.get('title'),
                 "direct_url": info.get('url'),
@@ -240,7 +273,7 @@ def get_direct_url():
                 "processed_at": datetime.now().isoformat()
             })
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 # ============================================
 # SYNC DOWNLOAD (download_video)
@@ -257,16 +290,16 @@ def download_video():
         if isinstance(client_meta, str):
             try:
                 if len(client_meta.encode('utf-8')) > MAX_CLIENT_META_BYTES:
-                    return jsonify({"success": False, "error": f"Invalid client_meta: exceeds {MAX_CLIENT_META_BYTES} bytes"}), 400
+                    return jsonify({"error": f"Invalid client_meta: exceeds {MAX_CLIENT_META_BYTES} bytes"}), 400
                 parsed = json.loads(client_meta)
                 client_meta = parsed if isinstance(parsed, dict) else None
             except json.JSONDecodeError as e:
-                return jsonify({"success": False, "error": f"Invalid client_meta JSON: {e}"}), 400
+                return jsonify({"error": f"Invalid client_meta JSON: {e}"}), 400
         ok, err = validate_client_meta(client_meta)
         if not ok:
-            return jsonify({"success": False, "error": f"Invalid client_meta: {err}"}), 400
+            return jsonify({"error": f"Invalid client_meta: {err}"}), 400
         if not video_url:
-            return jsonify({"success": False, "error": "URL is required"}), 400
+            return jsonify({"error": "URL is required"}), 400
 
         # Async mode: start background task and return immediately
         if bool(data.get('async', False)):
@@ -287,8 +320,8 @@ def download_video():
             thread = threading.Thread(target=_background_download, args=(task_id, video_url, quality, client_meta, "download_video_async", base_url, cookies_from_browser))
             thread.daemon = True
             thread.start()
+            # В async-режиме всегда возвращаем только task_id и статус, ошибки — только через /task_status
             return jsonify({
-                "success": True,
                 "task_id": task_id,
                 "status": "processing",
                 "check_status_url": f"/task_status/{task_id}",
@@ -338,7 +371,6 @@ def download_video():
                     metadata['client_meta'] = client_meta
                 save_task_metadata(task_id, metadata)
                 return jsonify({
-                    "success": True,
                     "task_id": task_id,
                     "status": "completed",
                     "video_id": info.get('id'),
@@ -356,7 +388,7 @@ def download_video():
                     "client_meta": client_meta,
                     "processed_at": metadata['completed_at']
                 })
-            return jsonify({"success": False, "error": "No file downloaded"}), 500
+            return jsonify({"error": "No file downloaded"}), 500
         except Exception as e:
             error_info = classify_youtube_error(str(e))
             metadata = {
@@ -374,7 +406,6 @@ def download_video():
                 metadata['client_meta'] = client_meta
             save_task_metadata(task_id, metadata)
             return jsonify({
-                "success": False,
                 "task_id": task_id,
                 "status": "error",
                 "error_type": error_info["error_type"],
@@ -384,7 +415,7 @@ def download_video():
                 "client_meta": client_meta
             }), 400
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 # ============================================
 # LEGACY DOWNLOAD FILE (root)
@@ -428,16 +459,16 @@ def download_direct():
         if isinstance(client_meta, str):
             try:
                 if len(client_meta.encode('utf-8')) > MAX_CLIENT_META_BYTES:
-                    return jsonify({"success": False, "error": f"Invalid client_meta: exceeds {MAX_CLIENT_META_BYTES} bytes"}), 400
+                    return jsonify({"error": f"Invalid client_meta: exceeds {MAX_CLIENT_META_BYTES} bytes"}), 400
                 parsed = json.loads(client_meta)
                 client_meta = parsed if isinstance(parsed, dict) else None
             except json.JSONDecodeError as e:
-                return jsonify({"success": False, "error": f"Invalid client_meta JSON: {e}"}), 400
+                return jsonify({"error": f"Invalid client_meta JSON: {e}"}), 400
         ok, err = validate_client_meta(client_meta)
         if not ok:
-            return jsonify({"success": False, "error": f"Invalid client_meta: {err}"}), 400
+            return jsonify({"error": f"Invalid client_meta: {err}"}), 400
         if not video_url:
-            return jsonify({"success": False, "error": "URL is required"}), 400
+            return jsonify({"error": "URL is required"}), 400
         cleanup_old_files()
         task_id = str(uuid.uuid4())
         create_task_dirs(task_id)
@@ -474,7 +505,6 @@ def download_direct():
                     metadata['client_meta'] = client_meta
                 save_task_metadata(task_id, metadata)
                 return jsonify({
-                    "success": True,
                     "task_id": task_id,
                     "status": "completed",
                     "video_id": info.get('id'),
@@ -492,9 +522,9 @@ def download_direct():
                     "client_meta": client_meta,
                     "processed_at": metadata['completed_at']
                 })
-            return jsonify({"success": False, "error": "No file downloaded"}), 500
+            return jsonify({"error": "No file downloaded"}), 500
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 # ============================================
 # VIDEO INFO
@@ -506,12 +536,11 @@ def get_video_info():
         data = request.json or {}
         video_url = data.get('url')
         if not video_url:
-            return jsonify({"success": False, "error": "URL is required"}), 400
+            return jsonify({"error": "URL is required"}), 400
         ydl_opts = {'quiet': True,'no_warnings': True}
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
             return jsonify({
-                "success": True,
                 "video_id": info.get('id'),
                 "title": info.get('title'),
                 "description": info.get('description', '')[:500],
@@ -526,7 +555,7 @@ def get_video_info():
                 "processed_at": datetime.now().isoformat()
             })
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 # ============================================
 # TASK STATUS
@@ -535,8 +564,8 @@ def get_video_info():
 def task_status(task_id):
     task = get_task(task_id)
     if not task:
-        return jsonify({"success": False, "error": "Task not found"}), 404
-    resp = {"success": True, "task_id": task_id, "status": task.get('status'), "created_at": task.get('created_at')}
+        return jsonify({"error": "Task not found"}), 404
+    resp = {"task_id": task_id, "status": task.get('status'), "created_at": task.get('created_at')}
     if task.get('client_meta') is not None:
         resp['client_meta'] = task['client_meta']
     if task.get('status') == 'completed':
