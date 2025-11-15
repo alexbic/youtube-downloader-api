@@ -1,6 +1,6 @@
 
 import os
-import json
+import os
 import logging
 from flask import Flask, request, jsonify, send_file
 import requests
@@ -10,6 +10,7 @@ import uuid
 import threading
 from functools import wraps
 from typing import Dict, Any
+import time
 
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
 try:
@@ -29,6 +30,11 @@ LOG_YTDLP_WARNINGS = os.getenv('LOG_YTDLP_WARNINGS', 'false').strip().lower() in
 
 # Cleanup TTL (0 = disabled, default: 3600 seconds = 1 hour)
 CLEANUP_TTL_SECONDS = int(os.getenv('CLEANUP_TTL_SECONDS', 3600))
+
+# Webhook delivery config
+WEBHOOK_RETRY_ATTEMPTS = int(os.getenv('WEBHOOK_RETRY_ATTEMPTS', 3))
+WEBHOOK_RETRY_INTERVAL_SECONDS = float(os.getenv('WEBHOOK_RETRY_INTERVAL_SECONDS', 5))
+WEBHOOK_TIMEOUT_SECONDS = float(os.getenv('WEBHOOK_TIMEOUT_SECONDS', 8))
 
 API_KEY = os.getenv('API_KEY')
 PUBLIC_BASE_URL = os.getenv('PUBLIC_BASE_URL') or os.getenv('EXTERNAL_BASE_URL')
@@ -70,6 +76,7 @@ def log_startup_info():
             logger.info("Cleanup: DISABLED (files persist indefinitely)")
         else:
             logger.info(f"Cleanup: TTL={CLEANUP_TTL_SECONDS}s ({CLEANUP_TTL_SECONDS//60}min)")
+    logger.info(f"Webhook: attempts={WEBHOOK_RETRY_ATTEMPTS}, interval={WEBHOOK_RETRY_INTERVAL_SECONDS}s, timeout={WEBHOOK_TIMEOUT_SECONDS}s")
     logger.info("=" * 60)
 
 def get_yt_dlp_version():
@@ -764,12 +771,21 @@ def _background_download(
     def _post_webhook(payload: dict):
         if not webhook_url:
             return
-        try:
-            headers = {"Content-Type": "application/json"}
-            requests.post(webhook_url, headers=headers, data=json.dumps(payload, ensure_ascii=False), timeout=8)
-        except Exception:
-            # не прерываем основной поток задач из-за вебхука
-            pass
+        headers = {"Content-Type": "application/json"}
+        body = json.dumps(payload, ensure_ascii=False)
+        attempts = max(1, WEBHOOK_RETRY_ATTEMPTS)
+        for i in range(1, attempts + 1):
+            try:
+                resp = requests.post(webhook_url, headers=headers, data=body, timeout=WEBHOOK_TIMEOUT_SECONDS)
+                if 200 <= resp.status_code < 300:
+                    return
+                # Неположительные коды считаем ошибкой доставки
+            except Exception:
+                # сетевые/таймаут ошибки — пробуем снова
+                pass
+            if i < attempts:
+                time.sleep(max(0.0, WEBHOOK_RETRY_INTERVAL_SECONDS))
+        # Все попытки исчерпаны — продолжаем без падения
 
     try:
         update_task(task_id, {"status": "downloading"})
