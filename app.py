@@ -26,6 +26,9 @@ PROGRESS_STEP = int(os.getenv('PROGRESS_STEP', 10))  # шаг, % для compact 
 LOG_YTDLP_OPTS = os.getenv('LOG_YTDLP_OPTS', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
 LOG_YTDLP_WARNINGS = os.getenv('LOG_YTDLP_WARNINGS', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
 
+# Cleanup TTL (0 = disabled, default: 3600 seconds = 1 hour)
+CLEANUP_TTL_SECONDS = int(os.getenv('CLEANUP_TTL_SECONDS', 3600))
+
 API_KEY = os.getenv('API_KEY')
 PUBLIC_BASE_URL = os.getenv('PUBLIC_BASE_URL') or os.getenv('EXTERNAL_BASE_URL')
 # Опциональный базовый URL для внутреннего контура (Docker network)
@@ -63,6 +66,11 @@ def log_startup_info():
             logger.info("Storage: memory (single-process)")
     logger.info(f"yt-dlp version: {get_yt_dlp_version()}")
     logger.info(f"Logging: level={LOG_LEVEL}, progress_mode={PROGRESS_LOG_MODE}, step={PROGRESS_STEP}%")
+    if 'CLEANUP_TTL_SECONDS' in globals():
+        if CLEANUP_TTL_SECONDS == 0:
+            logger.info("Cleanup: DISABLED (files persist indefinitely)")
+        else:
+            logger.info(f"Cleanup: TTL={CLEANUP_TTL_SECONDS}s ({CLEANUP_TTL_SECONDS//60}min)")
     logger.info("=" * 60)
 
 def get_yt_dlp_version():
@@ -402,16 +410,19 @@ log_startup_info()
 # CLEANUP
 # ============================================
 def cleanup_old_files():
+    if CLEANUP_TTL_SECONDS == 0:
+        return  # cleanup disabled
     import time, shutil
     now = time.time()
+    ttl = CLEANUP_TTL_SECONDS
     try:
         for filename in os.listdir(DOWNLOAD_DIR):
             fp = os.path.join(DOWNLOAD_DIR, filename)
-            if os.path.isfile(fp) and now - os.path.getmtime(fp) > 3600:
+            if os.path.isfile(fp) and now - os.path.getmtime(fp) > ttl:
                 os.remove(fp)
         for task_id in os.listdir(TASKS_DIR):
             tdir = os.path.join(TASKS_DIR, task_id)
-            if os.path.isdir(tdir) and now - os.path.getmtime(tdir) > 3600:
+            if os.path.isdir(tdir) and now - os.path.getmtime(tdir) > ttl:
                 shutil.rmtree(tdir, ignore_errors=True)
     except Exception:
         pass

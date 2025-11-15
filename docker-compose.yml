@@ -14,7 +14,6 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./downloads:/app/downloads
       - ./tasks:/app/tasks
       # ВАЖНО: Раскомментируйте строку ниже и положите cookies.txt рядом с docker-compose.yml
       # для обхода защиты YouTube (экспортируйте cookies из браузера через расширение)
@@ -36,6 +35,9 @@ services:
       # Gunicorn workers / timeout
       WORKERS: 2  # Can use 2+ workers with Redis
       GUNICORN_TIMEOUT: 600
+
+      # Cleanup TTL (0 = disabled, default: 3600 seconds = 1 hour)
+      CLEANUP_TTL_SECONDS: 3600
 
       # client_meta limits
       MAX_CLIENT_META_BYTES: 16384
