@@ -269,56 +269,9 @@ Content-Type: application/json
 }
 ```
 
-**Важно:** Прямые ссылки имеют ограниченный срок действия и могут выдать 403 Forbidden при скачивании. Для гарантированного скачивания используйте `/download_direct` или `/download_video`.
+**Важно:** Прямые ссылки имеют ограниченный срок действия и могут выдать 403 Forbidden при скачивании. Для гарантированного скачивания используйте `/download_video` (async или sync).
 
-### 6. Скачать видео напрямую (рекомендуется для n8n)
-
-```bash
-POST /download_direct
-Content-Type: application/json
-
-{
-  "url": "https://www.youtube.com/watch?v=VIDEO_ID",
-  "quality": "best[height<=720]"
-}
-```
-
-Ответ:
-```json
-{
-  "video_id": "VIDEO_ID",
-  "title": "Название видео",
-  "filename": "video.mp4",
-  "file_path": "/app/downloads/tmp123/video.mp4",
-  "file_size": 15728640,
-  "download_url": "/download_file/tmp123/video.mp4",
-  "duration": 180,
-  "processed_at": "2024-01-15T10:30:00.123456"
-  "video_id": "VIDEO_ID",
-  "title": "Название видео",
-  "filename": "video_20240115_103000.mp4",
-  "file_path": "/app/downloads/video_20240115_103000.mp4",
-  "file_size": 15728640,
-  "download_url": "http://youtube_downloader:5000/download_file/video_20240115_103000.mp4",
-  "download_path": "/download_file/video_20240115_103000.mp4",
-  "duration": 180,
-  "resolution": "1280x720",
-  "ext": "mp4",
-  "note": "Use download_url (full URL) or download_path (relative) to get the file. File will auto-delete after 1 hour.",
-  "processed_at": "2024-01-15T10:30:00.123456"
-}
-```
-
-**Обратите внимание**:
-- `filename` короткое безопасное имя в формате `video_YYYYMMDD_HHMMSS.ext`
-- Оригинальное название сохраняется в поле `title`
-- Файлы сохраняются напрямую в `/app/downloads/` без дополнительных папок
-- Файлы имеют правильные права доступа (644) для чтения из n8n
-- `download_url` содержит полный URL для использования в n8n
-
-Этот endpoint решает проблему 403 Forbidden. Скачивает видео на сервер и возвращает `download_url` для получения файла. Идеально для n8n и других инструментов автоматизации.
-
-**Использование в n8n:**
+### 6. n8n: рекомендуемая схема (через /download_video)
 
 **Шаг 0: Настройте n8n для работы с большими файлами**
 
@@ -335,7 +288,7 @@ services:
 **Шаг 1: HTTP Request Node (Получить URL)**
 ```
 Method: POST
-URL: http://youtube_downloader:5000/download_direct
+URL: http://youtube_downloader:5000/download_video
 Body: {"url": "https://youtube.com/watch?v=..."}
 Response Format: JSON
 ```
@@ -616,7 +569,7 @@ docker run -e N8N_DEFAULT_BINARY_DATA_MODE=filesystem ...
 
 **Причина**: YouTube блокирует прямые ссылки после истечения срока действия.
 
-**Решение**: Используйте endpoint `/download_direct` вместо `/get_direct_url`. Первый скачивает видео на сервер, второй дает только прямую ссылку.
+**Решение**: Используйте endpoint `/download_video` вместо `/get_direct_url`. Первый скачивает видео на сервер (и возвращает ссылку на сохранённый файл), второй даёт только прямую ссылку, которая может быстро протухать.
 
 ## Безопасность
 
