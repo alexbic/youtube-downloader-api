@@ -478,6 +478,63 @@ python app.py
 - Internal (auth=disabled): без `API_KEY` и без активного `PUBLIC_BASE_URL`. Ссылки будут строиться от `request.host_url`.
 - Public (auth=enabled): `PUBLIC_BASE_URL` + `API_KEY` заданы. Возвращаются внешние и внутренние абсолютные URL.
 
+## Quick Config
+
+Рекомендуемые быстрые конфигурации для типичных сценариев.
+
+### Production за reverse-proxy (публичный доступ)
+- `PUBLIC_BASE_URL`: публичный URL вашего сервиса, например `https://yt.example.com`
+- `API_KEY`: обязательный — включает авторизацию (Bearer)
+- `PROGRESS_LOG=off`: чтобы не засорять логи прогрессом
+- `LOG_LEVEL=INFO` (или `ERROR` для ещё тише)
+- `WORKERS=2`+ и Redis (для параллельных задач)
+
+Docker Compose пример:
+```yaml
+services:
+  youtube-downloader:
+    image: alexbic/youtube-downloader-api:latest
+    environment:
+      PUBLIC_BASE_URL: https://yt.example.com
+      API_KEY: ${API_KEY}
+      WORKERS: 2
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      PROGRESS_LOG: off
+      LOG_LEVEL: INFO
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./downloads:/app/downloads
+      # - ./cookies.txt:/app/cookies.txt  # при необходимости
+    depends_on:
+      - redis
+  redis:
+    image: redis:7-alpine
+```
+
+### Внутренний контур (только из вашей сети)
+- Без `API_KEY` и без `PUBLIC_BASE_URL` (auth=disabled)
+- `INTERNAL_BASE_URL` опционально — если нужно отдавать абсолютные внутренние ссылки
+- `PROGRESS_LOG=off`, `LOG_LEVEL=INFO`
+
+Docker run пример:
+```bash
+docker run -d -p 5000:5000 \
+  -e PROGRESS_LOG=off -e LOG_LEVEL=INFO \
+  -v $(pwd)/downloads:/app/downloads \
+  alexbic/youtube-downloader-api:latest
+```
+
+### Отладка
+- Включить подробный прогресс и отладочный уровень:
+```bash
+docker run -d -p 5000:5000 \
+  -e PROGRESS_LOG=full -e LOG_LEVEL=DEBUG -e LOG_YTDLP_OPTS=true \
+  alexbic/youtube-downloader-api:latest
+```
+
 ### Логирование
 - `LOG_LEVEL`: уровень логов приложения. Значения: `DEBUG`, `INFO` (по умолчанию), `WARNING`, `ERROR`, `CRITICAL`.
 - `PROGRESS_LOG`: управление логами прогресса скачивания yt-dlp.
