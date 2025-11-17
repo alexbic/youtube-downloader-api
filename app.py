@@ -642,6 +642,13 @@ def _webhook_resender_loop():
     first_scan = True
     while True:
         try:
+            # Перед сканированием — чистим просроченные задачи по TTL (публичная версия: 24 часа)
+            try:
+                removed = cleanup_old_files()
+                if removed > 0:
+                    logger.info(f"Resender: cleaned up {removed} expired task(s) older than {CLEANUP_TTL_SECONDS}s")
+            except Exception:
+                pass
             now = datetime.now()
             task_dirs = []
             try:
@@ -764,19 +771,26 @@ except Exception as e:
 # ============================================
 # CLEANUP
 # ============================================
-def cleanup_old_files():
+def cleanup_old_files() -> int:
     if CLEANUP_TTL_SECONDS == 0:
-        return  # cleanup disabled
+        return 0  # cleanup disabled
     import time, shutil
     now = time.time()
     ttl = CLEANUP_TTL_SECONDS
+    removed = 0
     try:
         for task_id in os.listdir(TASKS_DIR):
             tdir = os.path.join(TASKS_DIR, task_id)
-            if os.path.isdir(tdir) and now - os.path.getmtime(tdir) > ttl:
-                shutil.rmtree(tdir, ignore_errors=True)
+            try:
+                if os.path.isdir(tdir) and now - os.path.getmtime(tdir) > ttl:
+                    shutil.rmtree(tdir, ignore_errors=True)
+                    removed += 1
+            except Exception:
+                # Игнорируем проблемы с отдельными директориями, продолжаем
+                pass
     except Exception:
         pass
+    return removed
 
 # ============================================
 # HEALTH
