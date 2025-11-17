@@ -651,21 +651,30 @@ def _webhook_resender_loop():
             for task_id in task_dirs:
                 tdir = os.path.join(TASKS_DIR, task_id)
                 try:
-                    # Инициализируем состояние и метаданные
-                    st = load_webhook_state(task_id) or {}
-                    if not st.get('status'):
-                        logger.info(f"[{task_id[:8]}] Resender: found task without webhook state, initializing")
-                        st['status'] = 'pending'
-                        st['attempts'] = 0
-                        save_webhook_state(task_id, st)
-                    
-                    if st.get('status') == 'delivered':
-                        logger.debug(f"Resender: skipping task {task_id} (already delivered)")
+                    # Пропускаем активные задачи (воркер обрабатывает сейчас)
+                    try:
+                        t = get_task(task_id)
+                    except Exception:
+                        t = None
+                    if t and str(t.get('status')).lower() in ("queued", "downloading", "processing"):
+                        logger.debug(f"Resender: skipping task {task_id} (task in progress: {t.get('status')})")
                         continue
-                    
+
+                    # Читаем метаданные, ресендер работает только с терминальными статусами
                     meta = _load_metadata_for_payload(task_id)
                     if not meta:
                         logger.debug(f"Resender: skipping task {task_id} (no metadata)")
+                        continue
+                    if isinstance(meta, dict):
+                        mstatus = str(meta.get('status', '')).lower()
+                        if mstatus and mstatus not in ("completed", "error", "failed"):
+                            logger.debug(f"Resender: skipping task {task_id} (non-terminal metadata status: {mstatus})")
+                            continue
+
+                    # Состояние вебхука
+                    st = load_webhook_state(task_id) or {}
+                    if st.get('status') == 'delivered':
+                        logger.debug(f"Resender: skipping task {task_id} (already delivered)")
                         continue
                     
                     # URL вебхука: приоритет - состояние (на чём остановились), затем метаданные, затем дефолт
@@ -676,6 +685,7 @@ def _webhook_resender_loop():
                     # Если используем дефолтный URL, сохраняем его в состояние для последующих попыток
                     if not st.get('url') and url == DEFAULT_WEBHOOK_URL:
                         st['url'] = DEFAULT_WEBHOOK_URL
+                        # Не шумим созданием состояния раньше времени, сохраняем тихо
                         save_webhook_state(task_id, st)
                     
                     next_retry = st.get('next_retry')
