@@ -779,24 +779,70 @@ except Exception as e:
 # CLEANUP
 # ============================================
 def cleanup_old_files() -> int:
+    """
+    Удаляет задачи старше TTL секунд.
+    Использует created_at из metadata.json для проверки возраста задачи,
+    чтобы избежать проблем с обновлением mtime директории при рестарте контейнера.
+    """
     if CLEANUP_TTL_SECONDS == 0:
         return 0  # cleanup disabled
     import time, shutil
+    from datetime import datetime, timezone
+
     now = time.time()
     ttl = CLEANUP_TTL_SECONDS
     removed = 0
+
     try:
         for task_id in os.listdir(TASKS_DIR):
             tdir = os.path.join(TASKS_DIR, task_id)
             try:
-                if os.path.isdir(tdir) and now - os.path.getmtime(tdir) > ttl:
+                if not os.path.isdir(tdir):
+                    continue
+
+                # Читаем created_at из metadata.json
+                metadata_path = os.path.join(tdir, 'metadata.json')
+                task_created_at = None
+
+                if os.path.exists(metadata_path):
+                    try:
+                        with open(metadata_path, 'r', encoding='utf-8') as f:
+                            metadata = json.load(f)
+                            # metadata может быть списком (legacy) или объектом
+                            if isinstance(metadata, list) and len(metadata) > 0:
+                                created_str = metadata[0].get('created_at')
+                            elif isinstance(metadata, dict):
+                                created_str = metadata.get('created_at')
+                            else:
+                                created_str = None
+
+                            if created_str:
+                                # Парсим ISO timestamp: "2025-11-17T05:17:07.362338"
+                                created_dt = datetime.fromisoformat(created_str.replace('Z', '+00:00'))
+                                task_created_at = created_dt.timestamp()
+                    except Exception as e:
+                        logger.debug(f"Cleanup: failed to parse metadata for {task_id}: {e}")
+
+                # Если не удалось прочитать metadata, используем mtime как fallback
+                if task_created_at is None:
+                    task_created_at = os.path.getmtime(tdir)
+                    logger.debug(f"Cleanup: using mtime fallback for {task_id}")
+
+                # Проверяем возраст задачи
+                age_seconds = now - task_created_at
+                if age_seconds > ttl:
+                    logger.debug(f"Cleanup: removing task {task_id} (age: {age_seconds:.0f}s, ttl: {ttl}s)")
                     shutil.rmtree(tdir, ignore_errors=True)
                     removed += 1
-            except Exception:
+
+            except Exception as e:
                 # Игнорируем проблемы с отдельными директориями, продолжаем
+                logger.debug(f"Cleanup: error processing {task_id}: {e}")
                 pass
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Cleanup: error listing tasks directory: {e}")
         pass
+
     return removed
 
 # ============================================
