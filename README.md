@@ -324,6 +324,53 @@ Content-Type: application/json
 }
 ```
 
+### 7. Save Processing Results
+
+Save additional processing results (transcription, shorts timestamps, etc.) to an existing task.
+
+```bash
+POST /task/<task_id>/results
+Content-Type: application/json
+Authorization: Bearer YOUR_API_KEY  # if API_KEY is set
+
+{
+  "transcription": {
+    "text": "Full transcription text...",
+    "words": [
+      {"word": "hello", "start": 0.0, "end": 0.5},
+      {"word": "world", "start": 0.6, "end": 1.0}
+    ],
+    "language": "en",
+    "model": "whisper-large-v3"
+  },
+  "shorts": [
+    {"start": 10.5, "end": 25.3, "title": "Best moment"},
+    {"start": 45.0, "end": 60.0, "title": "Important quote"}
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "task_id": "abc123...",
+  "status": "saved",
+  "processing_results": {
+    "transcription": {...},
+    "shorts": [...],
+    "updated_at": "2024-01-15T10:30:00.123456"
+  }
+}
+```
+
+**Use case:** After downloading a video, you can:
+1. Process it with Whisper to get transcription
+2. Analyze transcription to find best moments for Shorts
+3. Save all results to the task using this endpoint
+4. On subsequent requests, check `metadata.json` for existing results to avoid re-processing
+
+The results are stored in `metadata.json` under `processing_results` key and preserved for the entire task TTL (default: 14 days).
+
 ---
 
 ## Configuration
@@ -346,7 +393,7 @@ Content-Type: application/json
 | `REDIS_INIT_RETRIES` | `10` | Max retries for Redis connection on startup. |
 | `REDIS_INIT_DELAY_SECONDS` | `1` | Delay between Redis connection retries (seconds). |
 | **Task Management** |||
-| `CLEANUP_TTL_SECONDS` | `3600` | TTL for task files in /app/tasks (0 = disabled). |
+| `CLEANUP_TTL_SECONDS` | `1209600` | TTL for task files in /app/tasks (0 = disabled). Default: 14 days. |
 | **Webhook Configuration** |||
 | `WEBHOOK_RETRY_ATTEMPTS` | `3` | Max webhook delivery attempts. |
 | `WEBHOOK_RETRY_INTERVAL_SECONDS` | `5` | Delay between webhook retries (seconds). |

@@ -28,8 +28,8 @@ PROGRESS_STEP = int(os.getenv('PROGRESS_STEP', 10))  # шаг, % для compact 
 LOG_YTDLP_OPTS = os.getenv('LOG_YTDLP_OPTS', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
 LOG_YTDLP_WARNINGS = os.getenv('LOG_YTDLP_WARNINGS', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
 
-# Cleanup TTL (0 = disabled, default: 3600 seconds = 1 hour)
-CLEANUP_TTL_SECONDS = int(os.getenv('CLEANUP_TTL_SECONDS', 3600))
+# Cleanup TTL (0 = disabled, default: 1209600 seconds = 14 days)
+CLEANUP_TTL_SECONDS = int(os.getenv('CLEANUP_TTL_SECONDS', 1209600))
 
 # Webhook delivery config
 WEBHOOK_RETRY_ATTEMPTS = int(os.getenv('WEBHOOK_RETRY_ATTEMPTS', 3))
@@ -928,6 +928,82 @@ def task_status(task_id):
     if task.get('client_meta') is not None:
         resp['client_meta'] = task['client_meta']
     return jsonify(resp)
+
+@app.route('/task/<task_id>/results', methods=['POST'])
+@require_api_key
+def save_task_results(task_id: str):
+    """Сохраняет дополнительные результаты обработки (транскрипция, и т.п.) к существующей задаче.
+    
+    Запрос должен содержать JSON с произвольными данными результатов.
+    Данные будут добавлены в metadata.json задачи под ключом 'processing_results'.
+    
+    Пример запроса:
+    {
+      "transcription": {
+        "text": "полная транскрипция...",
+        "words": [{"word": "привет", "start": 0.0, "end": 0.5}],
+        "language": "ru",
+        "model": "whisper-large-v3"
+      },
+      "shorts": [
+        {"start": 10.5, "end": 25.3, "title": "Лучший момент"},
+        {"start": 45.0, "end": 60.0, "title": "Важная цитата"}
+      ]
+    }
+    """
+    try:
+        data = request.json or {}
+        if not data:
+            return jsonify({"error": "Empty request body"}), 400
+        
+        # Проверяем, что задача существует
+        task = get_task(task_id)
+        if not task:
+            # Пробуем найти по metadata.json
+            meta_path = os.path.join(get_task_dir(task_id), "metadata.json")
+            if not os.path.exists(meta_path):
+                return jsonify({"error": "Task not found"}), 404
+        
+        # Загружаем существующий metadata.json
+        meta_path = os.path.join(get_task_dir(task_id), "metadata.json")
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+        except Exception:
+            metadata = {"task_id": task_id}
+        
+        # Если metadata — массив (формат completed task), берем первый элемент
+        if isinstance(metadata, list) and len(metadata) > 0:
+            metadata = metadata[0]
+        
+        # Добавляем/обновляем результаты обработки
+        if 'processing_results' not in metadata:
+            metadata['processing_results'] = {}
+        
+        metadata['processing_results'].update(data)
+        metadata['processing_results']['updated_at'] = datetime.now().isoformat()
+        
+        # Сохраняем обратно (если был массив, оборачиваем снова)
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                original = json.load(f)
+            if isinstance(original, list):
+                metadata_to_save = [metadata]
+            else:
+                metadata_to_save = metadata
+        except Exception:
+            metadata_to_save = metadata
+        
+        save_task_metadata(task_id, metadata_to_save)
+        
+        return jsonify({
+            "task_id": task_id,
+            "status": "saved",
+            "processing_results": metadata['processing_results']
+        })
+    except Exception as e:
+        logger.error(f"Failed to save results for task {task_id}: {e}")
+        return jsonify({"error": str(e)}), 500
 
 def _background_download(
     task_id: str,
