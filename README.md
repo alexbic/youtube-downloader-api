@@ -20,12 +20,13 @@
 - ⬇️ **Server-side downloads** - download videos to server with quality selection (sync/async)
 - 📊 **Video information** - get complete metadata
 - 🔄 **Sync and async modes** - choose between immediate or background processing
-- 🔗 **Webhook support** - POST notifications on task completion
+- 🔗 **Webhook support** - POST notifications on task completion with automatic retries
+- 🔁 **Webhook resender** - background service retries failed webhooks every 15 minutes
 - 🔑 **Optional authentication** - Bearer token support for public deployments
 - 🌐 **Absolute URLs** - internal and external URL support
-- 📦 **Redis support** - multi-worker task storage
+- 📦 **Redis support** - multi-worker task storage (built-in embedded Redis)
 - 🔒 **Cookie support** - bypass YouTube restrictions
-- 🧹 **Auto cleanup** - configurable TTL for task files
+- 🧹 **Auto cleanup** - automatic file deletion after 24 hours (fixed in public version)
 - 🐳 **Docker ready** - multi-arch support (amd64, arm64)
 - 📝 **Client metadata** - pass arbitrary JSON through the entire workflow
 
@@ -342,9 +343,10 @@ Content-Type: application/json
 | **Task Management** |||
 | ~~`CLEANUP_TTL_SECONDS`~~ | `86400` | ❌ **Not configurable** in public version. Fixed at 24 hours. |
 | **Webhook Configuration** |||
-| `WEBHOOK_RETRY_ATTEMPTS` | `3` | Max webhook delivery attempts. |
-| `WEBHOOK_RETRY_INTERVAL_SECONDS` | `5` | Delay between webhook retries (seconds). |
+| `WEBHOOK_RETRY_ATTEMPTS` | `3` | Max webhook delivery attempts (immediate retries on error). |
+| `WEBHOOK_RETRY_INTERVAL_SECONDS` | `5` | Delay between immediate webhook retries (seconds). |
 | `WEBHOOK_TIMEOUT_SECONDS` | `8` | Webhook request timeout (seconds). |
+| ~~`WEBHOOK_BACKGROUND_INTERVAL_SECONDS`~~ | `900` | ❌ **Not configurable** in public version. Background resender scans every 15 minutes (fixed). |
 | `DEFAULT_WEBHOOK_URL` | — | Fallback webhook URL (async). Used when request has no `webhook_url`. Must start with http(s)://, < 2048 chars. |
 | `WEBHOOK_HEADERS` | — | Extra headers for webhook POST. JSON object or list: `{"Authorization":"Bearer XXX","X-Source":"ytdl"}` OR `Authorization: Bearer XXX; X-Source: ytdl`. Sensitive headers (Authorization, X-API-Key, X-Auth-Token) masked in startup logs. |
 | **Logging** |||
@@ -385,6 +387,32 @@ Content-Type: application/json
 - ⚠️ **Fixed at 24 hours** - not configurable in public version
 - Files automatically deleted 24 hours after download
 - For configurable TTL, use [YouTube Downloader API Pro](https://github.com/alexbic/youtube-downloader-api-pro)
+
+### Webhook Resender
+
+The public version includes a **background webhook resender service** that automatically retries failed webhook deliveries:
+
+**How it works:**
+- Scans all tasks every **15 minutes** (fixed interval, not configurable)
+- Retries webhooks for tasks with status `completed` or `error` that haven't received successful delivery (HTTP 200-299)
+- Continues retrying until task is deleted by TTL cleanup (24 hours)
+- Webhook URL is persisted in task metadata (`webhook_url` field in `/task/{task_id}` response)
+
+**Delivery attempts:**
+1. **Immediate retries**: 3 attempts with 5-second intervals (on task completion)
+2. **Background retries**: Every 15 minutes until successful or TTL expires
+
+**Configuration:**
+- Use `DEFAULT_WEBHOOK_URL` to set fallback webhook for all async tasks without explicit `webhook_url`
+- Use `WEBHOOK_HEADERS` to add authentication headers: `{"Authorization": "Bearer XXX"}`
+- Monitor webhook delivery in logs (set `LOG_LEVEL=DEBUG` for detailed webhook payload preview)
+
+**Example with default webhook:**
+```yaml
+environment:
+  DEFAULT_WEBHOOK_URL: "https://your-server.com/webhooks/ytdl"
+  WEBHOOK_HEADERS: '{"Authorization": "Bearer secret123"}'
+```
 
 ---
 
