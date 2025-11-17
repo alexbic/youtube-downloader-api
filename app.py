@@ -285,6 +285,17 @@ def _prepare_ydl_opts(task_id: str | None, video_url: str, quality: str, outtmpl
         'format': quality,
         'outtmpl': outtmpl,
         'no_warnings': True,
+        # Больше устойчивости к временным сбоям сети/CDN
+        'retries': 10,
+        'fragment_retries': 10,
+        'socket_timeout': 20,
+        # Снижаем параллелизм фрагментов для стабильности (особенно в ограниченных средах)
+        'concurrent_fragment_downloads': 1,
+        # Честный User-Agent помогает против редких 5xx/anti-bot эвристик
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9'
+        },
     }
     # Управление уровнем детализации
     if PROGRESS_LOG_MODE == 'full':
@@ -484,6 +495,12 @@ def classify_youtube_error(error_message: str) -> dict:
     """Классифицирует ошибку YouTube для автоматической обработки"""
     error_lower = error_message.lower()
     
+    if 'http error 5' in error_lower or 'internal server error' in error_lower:
+        return {
+            "error_type": "network_or_server_error",
+            "error_message": "Upstream 5xx error from video server",
+            "user_action": "Retry later; usually transient server issue"
+        }
     if 'private video' in error_lower:
         return {
             "error_type": "private_video",
