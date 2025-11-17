@@ -20,9 +20,11 @@ COPY . .
 # Создаем нужные директории
 RUN mkdir -p /app/downloads /app/tasks /var/log/supervisor /var/run/supervisor
 
-# Supervisor конфиг для Redis + Gunicorn (все запускается от root)
+# Supervisor конфиг: прописываем user=root в [supervisord], чтобы убрать CRIT warning
 RUN echo '[supervisord]' > /etc/supervisor/conf.d/supervisord.conf && \
     echo 'nodaemon=true' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'user=root' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo '' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo '[program:redis]' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'command=redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save ""' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'autostart=true' >> /etc/supervisor/conf.d/supervisord.conf && \
