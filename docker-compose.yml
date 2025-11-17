@@ -11,7 +11,7 @@ services:
     ports:
       - "5002:5000"
     volumes:
-      - ./tasks:/app/tasks
+      - ./testing/tasks:/app/tasks
       # ВАЖНО: Раскомментируйте строку ниже и положите cookies.txt рядом с docker-compose.yml
       # для обхода защиты YouTube (экспортируйте cookies из браузера через расширение)
       # - ./cookies.txt:/app/cookies.txt
