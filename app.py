@@ -801,6 +801,8 @@ def download_video():
         if bool(data.get('async', False)):
             cleanup_old_files()
             task_id = str(uuid.uuid4())
+            logger.info(f"[{task_id[:8]}] Task created (async): {video_url}")
+            logger.debug(f"[{task_id[:8]}] quality={quality}, webhook={'yes' if webhook_url else 'no'}")
             create_task_dirs(task_id)
             task_data = {
                 "task_id": task_id,
@@ -843,13 +845,15 @@ def download_video():
 
         # Sync mode: download immediately and return result
         task_id = str(uuid.uuid4())
+        logger.info(f"[{task_id[:8]}] Task created (sync): {video_url}")
+        logger.debug(f"[{task_id[:8]}] quality={quality}")
         created_at_iso = datetime.now().isoformat()
         create_task_dirs(task_id)
         safe_filename = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         outtmpl = os.path.join(get_task_output_dir(task_id), f'{safe_filename}.%(ext)s')
         ydl_opts = _prepare_ydl_opts(task_id, video_url, quality, outtmpl, cookies_from_browser)
         if LOG_YTDLP_OPTS:
-            logger.info(f"[sync] yt-dlp opts for {video_url}: {ydl_opts}")
+            logger.debug(f"[{task_id[:8]}] yt-dlp opts: {ydl_opts}")
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(video_url, download=True)
@@ -859,6 +863,8 @@ def download_video():
             if os.path.exists(file_path):
                 os.chmod(file_path, 0o644)
                 file_size = os.path.getsize(file_path)
+                logger.info(f"[{task_id[:8]}] Completed (sync): {info.get('title', 'unknown')[:50]} [{file_size//1024//1024}MB]")
+                logger.debug(f"[{task_id[:8]}] video_id={info.get('id')}, ext={ext}, resolution={info.get('resolution')}")
                 download_endpoint = build_download_endpoint(task_id, filename)
                 task_download_url = build_absolute_url(download_endpoint)
                 task_download_url_internal = build_internal_url(download_endpoint)
@@ -920,6 +926,7 @@ def download_video():
             return jsonify({"error": "No file downloaded"}), 500
         except Exception as e:
             error_info = classify_youtube_error(str(e))
+            logger.error(f"[{task_id[:8]}] SYNC FAILED: type={error_info['error_type']}, msg={error_info['error_message']}")
             metadata = {
                 "task_id": task_id,
                 "status": "error",
@@ -1152,9 +1159,10 @@ def _background_download(
 ):
     def _post_webhook(payload: dict):
         if not webhook_url:
-            logger.warning(f"[{task_id[:8]}] Webhook skipped: no webhook_url provided")
+            logger.debug(f"[{task_id[:8]}] Webhook skipped: no webhook_url provided")
             return
-        logger.info(f"[{task_id[:8]}] Sending webhook to {webhook_url}")
+        logger.info(f"[{task_id[:8]}] Sending webhook")
+        logger.debug(f"[{task_id[:8]}] webhook_url={webhook_url}")
         headers = {"Content-Type": "application/json"}
         # Добавляем пользовательские заголовки, не позволяя переопределять Content-Type
         try:
@@ -1177,10 +1185,12 @@ def _background_download(
         attempts = max(1, WEBHOOK_RETRY_ATTEMPTS)
         for i in range(1, attempts + 1):
             try:
-                logger.debug(f"[{task_id[:8]}] Webhook attempt {i}/{attempts}")
+                if i > 1:
+                    logger.debug(f"[{task_id[:8]}] Webhook retry {i}/{attempts}")
                 resp = requests.post(webhook_url, headers=headers, data=body, timeout=WEBHOOK_TIMEOUT_SECONDS)
                 if 200 <= resp.status_code < 300:
-                    logger.info(f"[{task_id[:8]}] Webhook delivered successfully (HTTP {resp.status_code})")
+                    logger.info(f"[{task_id[:8]}] Webhook delivered")
+                    logger.debug(f"[{task_id[:8]}] HTTP {resp.status_code}")
                     st.update({
                         "status": "delivered",
                         "attempts": int(st.get("attempts") or 0) + 1,
@@ -1218,12 +1228,14 @@ def _background_download(
         logger.error(f"[{task_id[:8]}] Webhook delivery failed after {attempts} attempts; will retry in background")
 
     try:
+        logger.info(f"[{task_id[:8]}] Download started")
+        logger.debug(f"[{task_id[:8]}] url={video_url}, quality={quality}")
         update_task(task_id, {"status": "downloading"})
         safe_filename = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         outtmpl = os.path.join(get_task_output_dir(task_id), f"{safe_filename}.%(ext)s")
         ydl_opts = _prepare_ydl_opts(task_id, video_url, quality, outtmpl, cookies_from_browser)
         if LOG_YTDLP_OPTS:
-            logger.info(f"[async] yt-dlp opts for {video_url}: {ydl_opts}")
+            logger.debug(f"[{task_id[:8]}] yt-dlp opts: {ydl_opts}")
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
@@ -1234,6 +1246,8 @@ def _background_download(
         if os.path.exists(file_path):
             os.chmod(file_path, 0o644)
             file_size = os.path.getsize(file_path)
+            logger.info(f"[{task_id[:8]}] Download completed: {info.get('title', 'unknown')[:50]} [{file_size//1024//1024}MB]")
+            logger.debug(f"[{task_id[:8]}] video_id={info.get('id')}, ext={ext}, resolution={info.get('resolution')}")
             download_endpoint = build_download_endpoint(task_id, filename)
             full_task_download_url = build_absolute_url(download_endpoint, base_url_external or None)
             full_task_download_url_internal = build_internal_url(download_endpoint, base_url_internal or None)
@@ -1320,6 +1334,7 @@ def _background_download(
                 payload["client_meta"] = client_meta
             _post_webhook(payload)
         else:
+            logger.error(f"[{task_id[:8]}] DOWNLOAD FAILED: File not downloaded")
             error_info = classify_youtube_error("File not downloaded")
             update_task(task_id, {
                 "status": "error",
@@ -1356,6 +1371,7 @@ def _background_download(
             _post_webhook(payload)
     except Exception as e:
         error_info = classify_youtube_error(str(e))
+        logger.error(f"[{task_id[:8]}] DOWNLOAD EXCEPTION: type={error_info['error_type']}, msg={error_info['error_message'][:100]}")
         update_task(task_id, {
             "status": "error",
             "error_type": error_info["error_type"],
