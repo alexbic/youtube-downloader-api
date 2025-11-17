@@ -67,7 +67,9 @@ curl -X POST http://localhost:5000/get_direct_url \
 
 ## Installation
 
-### Docker Compose (Recommended)
+### Docker Compose (Custom Setup)
+
+> ⚠️ **Note**: The public version has embedded Redis. This example is for custom deployments only.
 
 ```yaml
 version: '3.8'
@@ -84,23 +86,6 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       # API Key for authentication (Bearer token)
       API_KEY: ${API_KEY}
-
-      # Redis configuration (enable multi-worker mode)
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_DB: 0
-
-      # Cleanup TTL (seconds, 0 = disabled)
-      CLEANUP_TTL_SECONDS: 3600
-
-      # Workers
-      WORKERS: 2
-    restart: unless-stopped
-    depends_on:
-      - redis
-
-  redis:
-    image: redis:7-alpine
     restart: unless-stopped
 ```
 
@@ -346,14 +331,14 @@ Content-Type: application/json
 | `PUBLIC_BASE_URL` | — | External base for absolute URLs (https://domain.com/api). Used only if `API_KEY` is set. |
 | `INTERNAL_BASE_URL` | — | Base for background URL generation (webhooks, Docker network). |
 | **Worker Configuration** |||
-| `WORKERS` | `1` | Gunicorn workers. Use `>=2` only with Redis. |
+| ~~`WORKERS`~~ | `2` | ❌ **Not configurable** in public version. Fixed at 2 workers. |
 | `GUNICORN_TIMEOUT` | `300` | Gunicorn timeout (seconds). |
 | **Redis Configuration** |||
-| `REDIS_HOST` | `redis` | Redis host for multi-worker task store. |
-| `REDIS_PORT` | `6379` | Redis port. |
-| `REDIS_DB` | `0` | Redis DB index (use different DB if sharing Redis). |
-| `REDIS_INIT_RETRIES` | `10` | Max retries for Redis connection on startup. |
-| `REDIS_INIT_DELAY_SECONDS` | `1` | Delay between Redis connection retries (seconds). |
+| ~~`REDIS_HOST`~~ | `localhost` | ❌ **Not configurable** in public version. Embedded Redis. |
+| ~~`REDIS_PORT`~~ | `6379` | ❌ **Not configurable** in public version. Embedded Redis. |
+| ~~`REDIS_DB`~~ | `0` | ❌ **Not configurable** in public version. Embedded Redis. |
+| ~~`REDIS_INIT_RETRIES`~~ | `10` | ❌ **Not configurable** in public version. Embedded Redis. |
+| ~~`REDIS_INIT_DELAY_SECONDS`~~ | `1` | ❌ **Not configurable** in public version. Embedded Redis. |
 | **Task Management** |||
 | ~~`CLEANUP_TTL_SECONDS`~~ | `86400` | ❌ **Not configurable** in public version. Fixed at 24 hours. |
 | **Webhook Configuration** |||
@@ -392,14 +377,14 @@ Content-Type: application/json
 
 ```
 /app/tasks/{task_id}/
-  ├── video_*.mp4       # Downloaded video files (TTL: CLEANUP_TTL_SECONDS)
-  └── metadata.json     # Task metadata (TTL: CLEANUP_TTL_SECONDS)
+  ├── video_*.mp4       # Downloaded video files (TTL: 24 hours in public version)
+  └── metadata.json     # Task metadata (TTL: 24 hours in public version)
 ```
 
-**Cleanup:**
-- Enabled if `CLEANUP_TTL_SECONDS > 0` (default: 3600 seconds = 1 hour)
-- Disabled if `CLEANUP_TTL_SECONDS = 0`
-- Deletes entire task directories after TTL expires
+**Cleanup (Public Version):**
+- ⚠️ **Fixed at 24 hours** - not configurable in public version
+- Files automatically deleted 24 hours after download
+- For configurable TTL, use [YouTube Downloader API Pro](https://github.com/alexbic/youtube-downloader-api-pro)
 
 ---
 
@@ -756,21 +741,19 @@ services:
 
 **Problem:** `Could not connect to Redis`
 
-**Solutions:**
-- Check `REDIS_HOST` and `REDIS_PORT` environment variables
-- Verify Redis container is running: `docker ps | grep redis`
-- API automatically falls back to memory mode if Redis unavailable
-- For multi-worker mode (2+ workers), Redis is required
+**Note:** Public version has **embedded Redis** - this error should not occur. If you see this error:
+- Restart the container: `docker restart yt-downloader`
+- Check container logs: `docker logs yt-downloader`
+- For external Redis configuration, use [YouTube Downloader API Pro](https://github.com/alexbic/youtube-downloader-api-pro)
 
 #### 6. Files not found after download
 
 **Problem:** `404 File not found`
 
 **Solutions:**
-- Files auto-delete after TTL expires (default: 3600s)
-- Check `CLEANUP_TTL_SECONDS` setting
+- Files auto-delete after 24 hours in public version (not configurable)
 - Download immediately after `status: "completed"`
-- Set `CLEANUP_TTL_SECONDS=0` to disable cleanup
+- For configurable TTL or permanent storage, use [YouTube Downloader API Pro](https://github.com/alexbic/youtube-downloader-api-pro)
 
 #### 7. Authentication errors
 
