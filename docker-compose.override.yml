@@ -19,6 +19,8 @@ services:
       # Webhook defaults for local testing
       DEFAULT_WEBHOOK_URL: "http://webhook:9001/webhook"
       WEBHOOK_HEADERS: '{"Authorization": "Bearer local-test-token", "X-Source": "ytdl"}'
+      # Фоновые ретраи вебхуков: интервал сканирования (сек)
+      WEBHOOK_BACKGROUND_INTERVAL_SECONDS: 900
       # Logging
       LOG_LEVEL: "INFO"
     ports:
