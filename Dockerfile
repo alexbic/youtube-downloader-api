@@ -27,6 +27,7 @@ RUN groupadd -r app && useradd -r -g app -d /app -s /usr/sbin/nologin app \
 # Supervisor конфиг для Redis + Gunicorn
 RUN echo '[supervisord]' > /etc/supervisor/conf.d/supervisord.conf && \
     echo 'nodaemon=true' >> /etc/supervisor/conf.d/supervisord.conf && \
+    echo 'user=root' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo '[program:redis]' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'user=app' >> /etc/supervisor/conf.d/supervisord.conf && \
     echo 'command=redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save ""' >> /etc/supervisor/conf.d/supervisord.conf && \
@@ -49,6 +50,8 @@ RUN echo '[supervisord]' > /etc/supervisor/conf.d/supervisord.conf && \
 
 EXPOSE 5000
 
-# Запускаем supervisor (Redis + Gunicorn с фиксированными лимитами)
-USER app
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+# Entrypoint: fix permissions on mounted volumes, then start supervisor
+USER root
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+ENTRYPOINT ["/docker-entrypoint.sh"]
