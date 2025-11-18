@@ -5,9 +5,10 @@
 [![Docker Hub](https://img.shields.io/docker/v/alexbic/youtube-downloader-api?label=Docker%20Hub&logo=docker)](https://hub.docker.com/r/alexbic/youtube-downloader-api)
 [![GitHub Container Registry](https://img.shields.io/badge/ghcr.io-image-blue?logo=github)](https://github.com/alexbic/youtube-downloader-api/pkgs/container/youtube-downloader-api)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue)](RELEASE_NOTES_v1.0.0.md)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue)](docs/RELEASE_NOTES_v1.0.0.md)
+[![Changelog](https://img.shields.io/badge/changelog-1.0.0-blue)](docs/CHANGELOG.md)
 
-> ⚠️ **PUBLIC VERSION**: This is the free, limited version with hardcoded limits (2 workers, 24h TTL, 256MB Redis).  
+> ⚠️ **PUBLIC VERSION**: This is the free, limited version with hardcoded limits (2 workers, 24h TTL, 256MB Redis).
 > 🚀 **Want more?** Check out [YouTube Downloader API Pro](https://github.com/alexbic/youtube-downloader-api-pro) - PostgreSQL storage, configurable TTL, processing results cache, and more!
 
 **English** | [Русский](README.ru.md)
