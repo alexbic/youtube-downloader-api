@@ -231,6 +231,7 @@ GET /task_status/<task_id>
   "ext": "mp4",
   "created_at": "2025-01-16T12:00:00.123456",
   "completed_at": "2025-01-16T12:00:10.123456",
+  "expires_at": "2025-01-17T12:00:00.123456",
   "client_meta": {"user_id": 123}
 }
 ```
@@ -540,6 +541,36 @@ Security & Observability:
 - Use HTTPS for external endpoints
 - Prefer secrets/secure env injection for tokens (Docker secrets, orchestrator vaults)
 
+### Per-Request Webhook Headers
+
+You can specify custom headers for a specific webhook using the `webhook_headers` parameter in the request body. These headers override global `WEBHOOK_HEADERS` for that specific webhook.
+
+```json
+{
+  "url": "https://youtube.com/watch?v=...",
+  "async": true,
+  "webhook_url": "https://your-webhook.com/endpoint",
+  "webhook_headers": {
+    "X-API-Key": "your-secret-key",
+    "Authorization": "Bearer token123",
+    "X-Custom-Header": "custom-value"
+  }
+}
+```
+
+Validation rules:
+- Must be a JSON object/dict with string keys and values
+- Header name max length: 256 characters
+- Header value max length: 2048 characters
+- `Content-Type` is always `application/json` and cannot be overridden
+- Priority: per-request `webhook_headers` > global `WEBHOOK_HEADERS`
+
+Use cases:
+- Different API keys for different webhooks
+- Request-specific authorization tokens
+- Custom tracing/correlation IDs
+- Client-specific identification headers
+
 Example docker-compose override:
 ```yaml
 services:
@@ -573,9 +604,20 @@ Note: Delivery uses retry policy (`WEBHOOK_RETRY_ATTEMPTS`, `WEBHOOK_RETRY_INTER
   "ext": "mp4",
   "created_at": "2025-01-16T06:18:46.629918",
   "completed_at": "2025-01-16T06:18:56.338989",
+  "expires_at": "2025-01-17T06:18:46.629918",
   "task_download_url_internal": "http://service.local:5000/download/...",
   "metadata_url_internal": "http://service.local:5000/download/.../metadata.json",
-  "client_meta": {"your":"meta"}
+  "client_meta": {"your":"meta"},
+  "webhook": {
+    "url": "http://n8n:5678/webhook/...",
+    "headers": {"X-API-Key": "secret123"},
+    "status": "delivered",
+    "attempts": 1,
+    "last_attempt": "2025-01-16T06:18:56.500000",
+    "last_status": 200,
+    "last_error": null,
+    "next_retry": null
+  }
 }
 ```
 

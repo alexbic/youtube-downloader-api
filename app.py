@@ -369,21 +369,52 @@ def save_task_metadata(task_id: str, metadata: Any):
     with open(meta_path, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
 
-def _webhook_state_path(task_id: str) -> str:
-    return os.path.join(get_task_dir(task_id), "webhook.json")
 
 def save_webhook_state(task_id: str, state: dict):
+    """Сохраняет состояние webhook в metadata.json в поле 'webhook'"""
     try:
-        os.makedirs(get_task_dir(task_id), exist_ok=True)
-        with open(_webhook_state_path(task_id), 'w', encoding='utf-8') as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-    except Exception:
+        meta_path = os.path.join(get_task_dir(task_id), "metadata.json")
+        # Читаем текущую metadata
+        metadata = None
+        if os.path.exists(meta_path):
+            try:
+                with open(meta_path, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+            except Exception:
+                pass
+
+        # Если metadata это массив (как обычно), обновляем первый элемент
+        if isinstance(metadata, list) and len(metadata) > 0:
+            metadata[0]["webhook"] = state
+        elif isinstance(metadata, dict):
+            metadata["webhook"] = state
+        else:
+            # Если metadata еще не создана, создаем минимальную структуру
+            metadata = [{"webhook": state}]
+
+        # Сохраняем обновленную metadata
+        with open(meta_path, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.debug(f"[{task_id[:8]}] Failed to save webhook state: {e}")
         pass
 
 def load_webhook_state(task_id: str) -> dict | None:
+    """Загружает состояние webhook из metadata.json поля 'webhook'"""
     try:
-        with open(_webhook_state_path(task_id), 'r', encoding='utf-8') as f:
-            return json.load(f)
+        meta_path = os.path.join(get_task_dir(task_id), "metadata.json")
+        if not os.path.exists(meta_path):
+            return None
+
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            metadata = json.load(f)
+
+        # Извлекаем webhook из metadata
+        if isinstance(metadata, list) and len(metadata) > 0:
+            return metadata[0].get("webhook")
+        elif isinstance(metadata, dict):
+            return metadata.get("webhook")
+        return None
     except Exception:
         return None
 
@@ -609,10 +640,19 @@ _log_startup_once()
 # ============================================
 # BACKGROUND WEBHOOK RESENDER
 # ============================================
-def _try_send_webhook_once(url: str, payload: dict, task_id: str) -> bool:
+def _try_send_webhook_once(url: str, payload: dict, task_id: str, webhook_headers: dict | None = None) -> bool:
     headers = {"Content-Type": "application/json"}
+    # Добавляем глобальные заголовки из конфига
     try:
         for k, v in (WEBHOOK_HEADERS or {}).items():
+            if k.lower() == 'content-type':
+                continue
+            headers[k] = v
+    except Exception:
+        pass
+    # Добавляем кастомные заголовки для этого webhook (приоритет выше глобальных)
+    try:
+        for k, v in (webhook_headers or {}).items():
             if k.lower() == 'content-type':
                 continue
             headers[k] = v
@@ -698,11 +738,24 @@ def _webhook_resender_loop():
                         logger.debug(f"Resender: skipping task {task_id} (already delivered)")
                         continue
                     
-                    # URL вебхука: приоритет - состояние (на чём остановились), затем метаданные, затем дефолт
-                    url = st.get('url') or (meta.get('webhook_url') if isinstance(meta, dict) else None) or DEFAULT_WEBHOOK_URL
+                    # URL вебхука: приоритет - состояние (на чём остановились), затем из webhook объекта, затем дефолт
+                    webhook_obj = meta.get('webhook') if isinstance(meta, dict) else None
+                    url = st.get('url')
+                    if not url and isinstance(webhook_obj, dict):
+                        url = webhook_obj.get('url')
+                    if not url:
+                        url = meta.get('webhook_url') if isinstance(meta, dict) else None  # Fallback для старых задач
+                    if not url:
+                        url = DEFAULT_WEBHOOK_URL
                     if not url:
                         logger.debug(f"Resender: skipping task {task_id} (no webhook URL and no DEFAULT_WEBHOOK_URL)")
                         continue
+
+                    # Загружаем кастомные заголовки webhook из metadata
+                    webhook_headers = None
+                    if isinstance(webhook_obj, dict):
+                        webhook_headers = webhook_obj.get('headers')
+
                     # Если используем дефолтный URL, сохраняем его в состояние для последующих попыток
                     if not st.get('url') and url == DEFAULT_WEBHOOK_URL:
                         st['url'] = DEFAULT_WEBHOOK_URL
@@ -738,7 +791,7 @@ def _webhook_resender_loop():
                     for k in ('task_download_url', 'metadata_url', 'task_download_url_internal', 'metadata_url_internal', 'client_meta', 'operation', 'error_type', 'error_message', 'user_action', 'raw_error', 'failed_at'):
                         if k in meta:
                             payload[k] = meta[k]
-                    ok = _try_send_webhook_once(url, payload, task_id)
+                    ok = _try_send_webhook_once(url, payload, task_id, webhook_headers)
                     if ok:
                         st.update({
                             'status': 'delivered',
@@ -930,6 +983,18 @@ def download_video():
                     return jsonify({"error": "Invalid webhook_url (too long)"}), 400
             except Exception:
                 return jsonify({"error": "Invalid webhook_url"}), 400
+
+        # webhook headers для кастомных заголовков (API ключи, авторизация и т.д.)
+        webhook_headers = data.get('webhook_headers')
+        if webhook_headers is not None:
+            if not isinstance(webhook_headers, dict):
+                return jsonify({"error": "Invalid webhook_headers (must be an object/dict)"}), 400
+            # Валидация заголовков
+            for key, value in webhook_headers.items():
+                if not isinstance(key, str) or not isinstance(value, str):
+                    return jsonify({"error": "Invalid webhook_headers (keys and values must be strings)"}), 400
+                if len(key) > 256 or len(value) > 2048:
+                    return jsonify({"error": "Invalid webhook_headers (header name or value too long)"}), 400
         client_meta = data.get('client_meta') or data.get('meta')
         if isinstance(client_meta, str):
             try:
@@ -960,12 +1025,13 @@ def download_video():
                 "quality": quality,
                 "cookies_from_browser": cookies_from_browser,
                 "client_meta": client_meta,
-                "webhook_url": webhook_url
+                "webhook_url": webhook_url,
+                "webhook_headers": webhook_headers
             }
             save_task(task_id, task_data)
             link_base_external = (PUBLIC_BASE_URL if (PUBLIC_BASE_URL and API_KEY) else None)
             link_base_internal = (INTERNAL_BASE_URL or (request.host_url.rstrip('/') if request and hasattr(request, 'host_url') else None))
-            thread = threading.Thread(target=_background_download, args=(task_id, video_url, quality, client_meta, "download_video_async", link_base_external or "", link_base_internal or "", cookies_from_browser, webhook_url))
+            thread = threading.Thread(target=_background_download, args=(task_id, video_url, quality, client_meta, "download_video_async", link_base_external or "", link_base_internal or "", cookies_from_browser, webhook_url, webhook_headers))
             thread.daemon = True
             thread.start()
             # Только internal, если нет внешнего контура; иначе обе
@@ -1018,6 +1084,14 @@ def download_video():
                 task_download_url_internal = build_internal_url(download_endpoint)
                 completed_at_iso = datetime.now().isoformat()
                 storage_rel_path = build_storage_rel_path(task_id, filename)
+                # Вычисляем время истечения TTL
+                created_dt = datetime.fromisoformat(created_at_iso)
+                if CLEANUP_TTL_SECONDS > 0:
+                    expires_dt = created_dt + timedelta(seconds=CLEANUP_TTL_SECONDS)
+                    expires_at_iso = expires_dt.isoformat()
+                else:
+                    expires_at_iso = None  # Файлы хранятся бессрочно
+
                 # Метафайл как массив из одного объекта, по требуемому формату
                 meta_item = {
                     "task_id": task_id,
@@ -1031,10 +1105,23 @@ def download_video():
                     "resolution": info.get('resolution'),
                     "ext": ext,
                     "created_at": created_at_iso,
-                    "completed_at": completed_at_iso
+                    "completed_at": completed_at_iso,
+                    "expires_at": expires_at_iso
                 }
+                # Добавляем информацию о webhook (объект с деталями или null)
                 if webhook_url:
-                    meta_item["webhook_url"] = webhook_url
+                    meta_item["webhook"] = {
+                        "url": webhook_url,
+                        "headers": webhook_headers,  # Кастомные заголовки для этого webhook
+                        "status": "pending",
+                        "attempts": 0,
+                        "last_attempt": None,
+                        "last_status": None,
+                        "last_error": None,
+                        "next_retry": None
+                    }
+                else:
+                    meta_item["webhook"] = None
                 if PUBLIC_BASE_URL and API_KEY:
                     meta_item["task_download_url"] = task_download_url
                     meta_item["metadata_url"] = build_absolute_url(f"/download/{task_id}/metadata.json")
@@ -1303,7 +1390,8 @@ def _background_download(
     base_url_external: str = "",
     base_url_internal: str = "",
     cookies_from_browser: str = None,
-    webhook_url: str | None = None
+    webhook_url: str | None = None,
+    webhook_headers: dict | None = None
 ):
     def _post_webhook(payload: dict):
         if not webhook_url:
@@ -1312,11 +1400,19 @@ def _background_download(
         logger.info(f"[{task_id[:8]}] Sending webhook")
         logger.debug(f"[{task_id[:8]}] webhook_url={webhook_url}")
         headers = {"Content-Type": "application/json"}
-        # Добавляем пользовательские заголовки, не позволяя переопределять Content-Type
+        # Добавляем глобальные пользовательские заголовки из конфига
         try:
             for k, v in (WEBHOOK_HEADERS or {}).items():
                 if k.lower() == 'content-type':
                     continue
+                headers[k] = v
+        except Exception:
+            pass
+        # Добавляем заголовки для конкретного webhook (приоритет выше глобальных)
+        try:
+            for k, v in (webhook_headers or {}).items():
+                if k.lower() == 'content-type':
+                    continue  # Не позволяем переопределять Content-Type
                 headers[k] = v
         except Exception:
             pass
@@ -1418,6 +1514,17 @@ def _background_download(
                 created_at_iso = None
             storage_rel_path = build_storage_rel_path(task_id, filename)
 
+            # Вычисляем время истечения TTL
+            if created_at_iso:
+                created_dt = datetime.fromisoformat(created_at_iso)
+                if CLEANUP_TTL_SECONDS > 0:
+                    expires_dt = created_dt + timedelta(seconds=CLEANUP_TTL_SECONDS)
+                    expires_at_iso = expires_dt.isoformat()
+                else:
+                    expires_at_iso = None  # Файлы хранятся бессрочно
+            else:
+                expires_at_iso = None
+
             updates = {
                 "status": "completed",
                 "video_id": info.get('id'),
@@ -1447,8 +1554,23 @@ def _background_download(
                 "resolution": info.get('resolution'),
                 "ext": ext,
                 "created_at": created_at_iso,
-                "completed_at": completed_at_iso
+                "completed_at": completed_at_iso,
+                "expires_at": expires_at_iso
             }
+            # Добавляем информацию о webhook (объект с деталями или null)
+            if webhook_url:
+                meta_item["webhook"] = {
+                    "url": webhook_url,
+                    "headers": webhook_headers,  # Кастомные заголовки для этого webhook
+                    "status": "pending",
+                    "attempts": 0,
+                    "last_attempt": None,
+                    "last_status": None,
+                    "last_error": None,
+                    "next_retry": None
+                }
+            else:
+                meta_item["webhook"] = None
             if base_url_external:
                 meta_item["task_download_url"] = full_task_download_url
                 meta_item["metadata_url"] = build_absolute_url(f"/download/{task_id}/metadata.json", base_url_external)
@@ -1459,8 +1581,6 @@ def _background_download(
                 meta_item["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json", base_url_internal or None)
             if client_meta is not None:
                 meta_item["client_meta"] = client_meta
-            if webhook_url:
-                meta_item["webhook_url"] = webhook_url
             save_task_metadata(task_id, [meta_item])
 
             # webhook payload (client_meta последним)
@@ -1476,7 +1596,8 @@ def _background_download(
                 "resolution": info.get('resolution'),
                 "ext": ext,
                 "created_at": created_at_iso,
-                "completed_at": completed_at_iso
+                "completed_at": completed_at_iso,
+                "expires_at": expires_at_iso
             }
             if base_url_external:
                 payload["task_download_url"] = full_task_download_url
