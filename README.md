@@ -405,7 +405,7 @@ The public version includes a **background webhook resender service** that autom
 - Scans all tasks every **15 minutes** (fixed interval, not configurable)
 - Retries webhooks for tasks with status `completed` or `error` that haven't received successful delivery (HTTP 200-299)
 - Continues retrying until task is deleted by TTL cleanup (24 hours)
-- Webhook URL is persisted in task metadata (`webhook_url` field in `/task/{task_id}` response)
+- Webhook configuration is persisted in task metadata (accessible via `/task/{task_id}` response)
 
 **Delivery attempts:**
 1. **Immediate retries**: 3 attempts with 5-second intervals (on task completion)
@@ -572,7 +572,7 @@ Validation rules:
 - Header name max length: 256 characters
 - Header value max length: 2048 characters
 - `Content-Type` is always `application/json` and cannot be overridden
-- Priority: per-request `webhook_headers` > global `WEBHOOK_HEADERS`
+- Priority: per-request `webhook.headers` > global `WEBHOOK_HEADERS`
 
 Use cases:
 - Different API keys for different webhooks
@@ -645,7 +645,7 @@ Note: Delivery uses retry policy (`WEBHOOK_RETRY_ATTEMPTS`, `WEBHOOK_RETRY_INTER
 ```
 
 **Configuration:**
-- `webhook_url` must start with http(s):// and be < 2048 characters
+- `webhook.url` must start with http(s):// and be < 2048 characters
 - Timeout: `WEBHOOK_TIMEOUT_SECONDS` (default: 8s)
 - Retry attempts: `WEBHOOK_RETRY_ATTEMPTS` (default: 3)
 - Retry interval: `WEBHOOK_RETRY_INTERVAL_SECONDS` (default: 5s)
