@@ -370,6 +370,107 @@ def save_task_metadata(task_id: str, metadata: Any):
         json.dump(metadata, f, ensure_ascii=False, indent=2)
 
 
+def build_structured_metadata(
+    task_id: str,
+    status: str,
+    created_at: str,
+    completed_at: str | None,
+    expires_at: str | None,
+    video_id: str | None,
+    title: str | None,
+    duration: int | None,
+    resolution: str | None,
+    ext: str | None,
+    filename: str | None,
+    download_endpoint: str | None,
+    storage_rel_path: str | None,
+    task_download_url: str | None,
+    task_download_url_internal: str | None,
+    metadata_url: str | None,
+    metadata_url_internal: str | None,
+    webhook_url: str | None,
+    webhook_headers: dict | None,
+    client_meta: Any | None
+) -> dict:
+    """
+    Builds metadata object with structured, predictable field ordering.
+
+    Field groups (in order):
+    1. Task info (task_id, status, timestamps)
+    2. Input (original video info)
+    3. Output (processing result)
+    4. Webhook (webhook object with status tracking)
+    5. Client meta (always last)
+    """
+    result = {}
+
+    # 1. TASK INFO
+    result["task_id"] = task_id
+    result["status"] = status
+    result["created_at"] = created_at
+    if completed_at is not None:
+        result["completed_at"] = completed_at
+    if expires_at is not None:
+        result["expires_at"] = expires_at
+
+    # 2. INPUT (original video information)
+    input_data = {}
+    if video_id is not None:
+        input_data["video_id"] = video_id
+    if title is not None:
+        input_data["title"] = title
+    if duration is not None:
+        input_data["duration"] = duration
+    if resolution is not None:
+        input_data["resolution"] = resolution
+    if ext is not None:
+        input_data["ext"] = ext
+    if input_data:  # Only add if not empty
+        result["input"] = input_data
+
+    # 3. OUTPUT (processing result)
+    output_data = {}
+    if filename is not None:
+        output_data["filename"] = filename
+    if download_endpoint is not None:
+        output_data["download_endpoint"] = download_endpoint
+    if storage_rel_path is not None:
+        output_data["storage_rel_path"] = storage_rel_path
+    # URLs (external first if available, then internal)
+    if task_download_url is not None:
+        output_data["task_download_url"] = task_download_url
+    if metadata_url is not None:
+        output_data["metadata_url"] = metadata_url
+    if task_download_url_internal is not None:
+        output_data["task_download_url_internal"] = task_download_url_internal
+    if metadata_url_internal is not None:
+        output_data["metadata_url_internal"] = metadata_url_internal
+    if output_data:  # Only add if not empty
+        result["output"] = output_data
+
+    # 4. WEBHOOK
+    if webhook_url:
+        result["webhook"] = {
+            "url": webhook_url,
+            "headers": webhook_headers,
+            "status": "pending",
+            "attempts": 0,
+            "last_attempt": None,
+            "last_status": None,
+            "last_error": None,
+            "next_retry": None,
+            "task_id": task_id
+        }
+    else:
+        result["webhook"] = None
+
+    # 5. CLIENT META (always last)
+    if client_meta is not None:
+        result["client_meta"] = client_meta
+
+    return result
+
+
 def save_webhook_state(task_id: str, state: dict):
     """Сохраняет состояние webhook в metadata.json в поле 'webhook'"""
     try:
@@ -1123,45 +1224,28 @@ def download_video():
                     expires_at_iso = None  # Файлы хранятся бессрочно
 
                 # Метафайл как массив из одного объекта, по требуемому формату
-                meta_item = {
-                    "task_id": task_id,
-                    "status": "completed",
-                    "video_id": info.get('id'),
-                    "title": info.get('title'),
-                    "filename": filename,
-                    "download_endpoint": download_endpoint,
-                    "storage_rel_path": storage_rel_path,
-                    "duration": info.get('duration'),
-                    "resolution": info.get('resolution'),
-                    "ext": ext,
-                    "created_at": created_at_iso,
-                    "completed_at": completed_at_iso,
-                    "expires_at": expires_at_iso
-                }
-                # Добавляем информацию о webhook (объект с деталями или null)
-                if webhook_url:
-                    meta_item["webhook"] = {
-                        "url": webhook_url,
-                        "headers": webhook_headers,  # Кастомные заголовки для этого webhook
-                        "status": "pending",
-                        "attempts": 0,
-                        "last_attempt": None,
-                        "last_status": None,
-                        "last_error": None,
-                        "next_retry": None
-                    }
-                else:
-                    meta_item["webhook"] = None
-                if PUBLIC_BASE_URL and API_KEY:
-                    meta_item["task_download_url"] = task_download_url
-                    meta_item["metadata_url"] = build_absolute_url(f"/download/{task_id}/metadata.json")
-                    meta_item["task_download_url_internal"] = task_download_url_internal
-                    meta_item["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json")
-                else:
-                    meta_item["task_download_url_internal"] = task_download_url_internal
-                    meta_item["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json")
-                if client_meta is not None:
-                    meta_item["client_meta"] = client_meta
+                meta_item = build_structured_metadata(
+                    task_id=task_id,
+                    status="completed",
+                    created_at=created_at_iso,
+                    completed_at=completed_at_iso,
+                    expires_at=expires_at_iso,
+                    video_id=info.get('id'),
+                    title=info.get('title'),
+                    duration=info.get('duration'),
+                    resolution=info.get('resolution'),
+                    ext=ext,
+                    filename=filename,
+                    download_endpoint=download_endpoint,
+                    storage_rel_path=storage_rel_path,
+                    task_download_url=task_download_url if (PUBLIC_BASE_URL and API_KEY) else None,
+                    task_download_url_internal=task_download_url_internal,
+                    metadata_url=build_absolute_url(f"/download/{task_id}/metadata.json") if (PUBLIC_BASE_URL and API_KEY) else None,
+                    metadata_url_internal=build_internal_url(f"/download/{task_id}/metadata.json"),
+                    webhook_url=webhook_url,
+                    webhook_headers=webhook_headers,
+                    client_meta=client_meta
+                )
                 save_task_metadata(task_id, [meta_item])
                 resp_sync = {
                     "task_id": task_id,
@@ -1580,45 +1664,28 @@ def _background_download(
                 updates["task_download_url_internal"] = full_task_download_url_internal
             update_task(task_id, updates)
             # Метафайл как массив из одного объекта, по требуемому формату
-            meta_item = {
-                "task_id": task_id,
-                "status": "completed",
-                "video_id": info.get('id'),
-                "title": info.get('title'),
-                "filename": filename,
-                "download_endpoint": download_endpoint,
-                "storage_rel_path": storage_rel_path,
-                "duration": info.get('duration'),
-                "resolution": info.get('resolution'),
-                "ext": ext,
-                "created_at": created_at_iso,
-                "completed_at": completed_at_iso,
-                "expires_at": expires_at_iso
-            }
-            # Добавляем информацию о webhook (объект с деталями или null)
-            if webhook_url:
-                meta_item["webhook"] = {
-                    "url": webhook_url,
-                    "headers": webhook_headers,  # Кастомные заголовки для этого webhook
-                    "status": "pending",
-                    "attempts": 0,
-                    "last_attempt": None,
-                    "last_status": None,
-                    "last_error": None,
-                    "next_retry": None
-                }
-            else:
-                meta_item["webhook"] = None
-            if base_url_external:
-                meta_item["task_download_url"] = full_task_download_url
-                meta_item["metadata_url"] = build_absolute_url(f"/download/{task_id}/metadata.json", base_url_external)
-                meta_item["task_download_url_internal"] = full_task_download_url_internal
-                meta_item["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json", base_url_internal or None)
-            else:
-                meta_item["task_download_url_internal"] = full_task_download_url_internal
-                meta_item["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json", base_url_internal or None)
-            if client_meta is not None:
-                meta_item["client_meta"] = client_meta
+            meta_item = build_structured_metadata(
+                task_id=task_id,
+                status="completed",
+                created_at=created_at_iso,
+                completed_at=completed_at_iso,
+                expires_at=expires_at_iso,
+                video_id=info.get('id'),
+                title=info.get('title'),
+                duration=info.get('duration'),
+                resolution=info.get('resolution'),
+                ext=ext,
+                filename=filename,
+                download_endpoint=download_endpoint,
+                storage_rel_path=storage_rel_path,
+                task_download_url=full_task_download_url if base_url_external else None,
+                task_download_url_internal=full_task_download_url_internal,
+                metadata_url=build_absolute_url(f"/download/{task_id}/metadata.json", base_url_external) if base_url_external else None,
+                metadata_url_internal=build_internal_url(f"/download/{task_id}/metadata.json", base_url_internal or None),
+                webhook_url=webhook_url,
+                webhook_headers=webhook_headers,
+                client_meta=client_meta
+            )
             save_task_metadata(task_id, [meta_item])
 
             # webhook payload (client_meta последним)
