@@ -1053,19 +1053,27 @@ def download_video():
                     "check_status_url": build_absolute_url(f"/task_status/{task_id}", link_base_external),
                     "metadata_url": build_absolute_url(f"/download/{task_id}/metadata.json", link_base_external),
                     "check_status_url_internal": build_internal_url(f"/task_status/{task_id}", link_base_internal),
-                    "metadata_url_internal": build_internal_url(f"/download/{task_id}/metadata.json", link_base_internal),
-                    "client_meta": client_meta,
-                    "webhook_url": webhook_url
+                    "metadata_url_internal": build_internal_url(f"/download/{task_id}/metadata.json", link_base_internal)
                 }
+                # Добавляем webhook объект, если был предоставлен
+                if webhook:
+                    resp_async["webhook"] = webhook
+                # client_meta всегда в конце
+                if client_meta is not None:
+                    resp_async["client_meta"] = client_meta
             else:
                 resp_async = {
                     "task_id": task_id,
                     "status": "processing",
                     "check_status_url_internal": build_internal_url(f"/task_status/{task_id}", link_base_internal),
-                    "metadata_url_internal": build_internal_url(f"/download/{task_id}/metadata.json", link_base_internal),
-                    "client_meta": client_meta,
-                    "webhook_url": webhook_url
+                    "metadata_url_internal": build_internal_url(f"/download/{task_id}/metadata.json", link_base_internal)
                 }
+                # Добавляем webhook объект, если был предоставлен
+                if webhook:
+                    resp_async["webhook"] = webhook
+                # client_meta всегда в конце
+                if client_meta is not None:
+                    resp_async["client_meta"] = client_meta
             return jsonify(resp_async), 202
 
         # Sync mode: download immediately and return result
@@ -1281,8 +1289,6 @@ def task_status(task_id):
                         "created_at": mi.get('created_at'),
                         "completed_at": mi.get('completed_at')
                     }
-                    if mi.get('webhook_url') is not None:
-                        resp['webhook_url'] = mi.get('webhook_url')
                     if endpoint:
                         if PUBLIC_BASE_URL and API_KEY:
                             resp["task_download_url"] = _join_url(PUBLIC_BASE_URL, endpoint)
@@ -1292,6 +1298,10 @@ def task_status(task_id):
                         else:
                             resp["task_download_url_internal"] = build_internal_url(endpoint)
                             resp["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json")
+                    # Добавляем webhook из metadata.json, если есть
+                    if mi.get('webhook') is not None:
+                        resp['webhook'] = mi.get('webhook')
+                    # client_meta всегда в конце
                     if mi.get('client_meta') is not None:
                         resp['client_meta'] = mi['client_meta']
                     # Включаем состояние вебхука, если есть
@@ -1316,10 +1326,12 @@ def task_status(task_id):
                     }
                     if meta.get('raw_error'):
                         resp['raw_error'] = meta['raw_error']
+                    # Добавляем webhook из metadata.json, если есть
+                    if meta.get('webhook') is not None:
+                        resp['webhook'] = meta.get('webhook')
+                    # client_meta всегда в конце
                     if meta.get('client_meta') is not None:
                         resp['client_meta'] = meta['client_meta']
-                    if meta.get('webhook_url') is not None:
-                        resp['webhook_url'] = meta.get('webhook_url')
                     # Включаем состояние вебхука, если есть
                     try:
                         st = load_webhook_state(task_id)
@@ -1376,11 +1388,15 @@ def task_status(task_id):
         resp['user_action'] = task.get('user_action', 'Review error manually')
         if task.get('raw_error'):
             resp['raw_error'] = task.get('raw_error')
-    # Добавляем client_meta строго последним, если присутствует
+    # Восстанавливаем webhook объект из task data (webhook_url + webhook_headers)
+    if task.get('webhook_url') is not None:
+        webhook_obj = {"url": task['webhook_url']}
+        if task.get('webhook_headers'):
+            webhook_obj["headers"] = task['webhook_headers']
+        resp['webhook'] = webhook_obj
+    # client_meta всегда строго последним
     if task.get('client_meta') is not None:
         resp['client_meta'] = task['client_meta']
-    if task.get('webhook_url') is not None:
-        resp['webhook_url'] = task['webhook_url']
     # Включаем состояние вебхука, если есть
     try:
         st = load_webhook_state(task_id)
