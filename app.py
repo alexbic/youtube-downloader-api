@@ -788,9 +788,20 @@ def _webhook_resender_loop():
                         'created_at': meta.get('created_at'),
                         'completed_at': meta.get('completed_at'),
                     }
-                    for k in ('task_download_url', 'metadata_url', 'task_download_url_internal', 'metadata_url_internal', 'client_meta', 'operation', 'error_type', 'error_message', 'user_action', 'raw_error', 'failed_at'):
+                    for k in ('task_download_url', 'metadata_url', 'task_download_url_internal', 'metadata_url_internal', 'operation', 'error_type', 'error_message', 'user_action', 'raw_error', 'failed_at'):
                         if k in meta:
                             payload[k] = meta[k]
+                    # Добавляем webhook объект если есть
+                    if url or webhook_headers:
+                        webhook_obj = {}
+                        if url:
+                            webhook_obj["url"] = url
+                        if webhook_headers:
+                            webhook_obj["headers"] = webhook_headers
+                        payload["webhook"] = webhook_obj
+                    # client_meta добавляем последним
+                    if 'client_meta' in meta:
+                        payload['client_meta'] = meta['client_meta']
                     ok = _try_send_webhook_once(url, payload, task_id, webhook_headers)
                     if ok:
                         st.update({
@@ -1634,6 +1645,14 @@ def _background_download(
             else:
                 payload["task_download_url_internal"] = full_task_download_url_internal
                 payload["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json", base_url_internal or None)
+            # Добавляем webhook объект если есть
+            if webhook_url or webhook_headers:
+                webhook_obj = {}
+                if webhook_url:
+                    webhook_obj["url"] = webhook_url
+                if webhook_headers:
+                    webhook_obj["headers"] = webhook_headers
+                payload["webhook"] = webhook_obj
             if client_meta is not None:
                 payload["client_meta"] = client_meta
             _post_webhook(payload)
@@ -1670,6 +1689,14 @@ def _background_download(
                 "user_action": error_info["user_action"],
                 "failed_at": datetime.now().isoformat()
             }
+            # Добавляем webhook объект если есть
+            if webhook_url or webhook_headers:
+                webhook_obj = {}
+                if webhook_url:
+                    webhook_obj["url"] = webhook_url
+                if webhook_headers:
+                    webhook_obj["headers"] = webhook_headers
+                payload["webhook"] = webhook_obj
             if client_meta is not None:
                 payload['client_meta'] = client_meta
             _post_webhook(payload)
@@ -1709,6 +1736,14 @@ def _background_download(
             "raw_error": str(e)[:1000],
             "failed_at": datetime.now().isoformat()
         }
+        # Добавляем webhook объект если есть
+        if webhook_url or webhook_headers:
+            webhook_obj = {}
+            if webhook_url:
+                webhook_obj["url"] = webhook_url
+            if webhook_headers:
+                webhook_obj["headers"] = webhook_headers
+            payload["webhook"] = webhook_obj
         if client_meta is not None:
             payload['client_meta'] = client_meta
         _post_webhook(payload)
