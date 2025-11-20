@@ -92,7 +92,7 @@ def log_startup_info():
     root_logger = logging.getLogger()
     handlers = root_logger.handlers if root_logger.handlers else [logging.StreamHandler()]
     old_formatters = [h.formatter for h in handlers]
-    # Устанавливаем временный форматтер без времени
+    # Устанавливаем временный форматтер без времени для всего стартового блока
     for h in handlers:
         h.setFormatter(logging.Formatter('[%(levelname)s] %(name)s: %(message)s'))
     try:
@@ -111,25 +111,25 @@ def log_startup_info():
         logger.info("🚀 Upgrade to Pro: support@alexbic.net")
         logger.info("   ✓ Configurable parameters ✓ PostgreSQL ✓ /results endpoint")
         logger.info("=" * 60)
+        logger.info(f"Log level: {LOG_LEVEL} | yt-dlp: {get_yt_dlp_version()}")
+        # Log API access mode
+        if public_url and API_KEY:
+            logger.info(f"Mode: PUBLIC API | Base URL: {public_url}")
+            logger.info("Authentication: ENABLED")
+        else:
+            logger.info("Mode: INTERNAL (Docker network)")
+            if public_url and not API_KEY:
+                logger.warning("⚠️  PUBLIC_BASE_URL ignored (API_KEY not set)")
+            logger.info("Authentication: DISABLED")
+        if 'TASKS_DIR' in globals():
+            logger.info(f"Tasks dir: {TASKS_DIR}")
+        if 'COOKIES_PATH' in globals() and os.path.exists(COOKIES_PATH):
+            logger.info(f"Cookies: available")
+        logger.info("=" * 60)
     finally:
         # Возвращаем старый форматтер
         for h, old_fmt in zip(handlers, old_formatters):
             h.setFormatter(old_fmt)
-    logger.info(f"Log level: {LOG_LEVEL} | yt-dlp: {get_yt_dlp_version()}")
-    # Log API access mode
-    if public_url and API_KEY:
-        logger.info(f"Mode: PUBLIC API | Base URL: {public_url}")
-        logger.info("Authentication: ENABLED")
-    else:
-        logger.info("Mode: INTERNAL (Docker network)")
-        if public_url and not API_KEY:
-            logger.warning("⚠️  PUBLIC_BASE_URL ignored (API_KEY not set)")
-        logger.info("Authentication: DISABLED")
-    if 'TASKS_DIR' in globals():
-        logger.info(f"Tasks dir: {TASKS_DIR}")
-    if 'COOKIES_PATH' in globals() and os.path.exists(COOKIES_PATH):
-        logger.info(f"Cookies: available")
-    logger.info("=" * 60)
 
 def _log_startup_once():
     """Логируем старт приложения один раз на контейнер (атомарный маркер в /tmp)."""
