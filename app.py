@@ -392,7 +392,9 @@ def build_structured_metadata(
     metadata_url_internal: str | None,
     webhook_url: str | None,
     webhook_headers: dict | None,
-    client_meta: Any | None
+    client_meta: Any | None,
+    ttl_seconds: int | None = None,
+    ttl_human: str | None = None
 ) -> dict:
     """
     Builds metadata object with unified structure matching video-processor-api.
@@ -460,7 +462,7 @@ def build_structured_metadata(
 
     # 3. OUTPUT (файлы и URL)
     output_data = {}
-    
+
     # output_files array
     output_files = []
     if filename and download_endpoint:
@@ -475,16 +477,22 @@ def build_structured_metadata(
         if task_download_url_internal:
             file_entry["download_url_internal"] = task_download_url_internal
         output_files.append(file_entry)
-    
+
     output_data["output_files"] = output_files
     output_data["total_files"] = len(output_files)
-    
+
     # Metadata URLs
     if metadata_url:
         output_data["metadata_url"] = metadata_url
     if metadata_url_internal:
         output_data["metadata_url_internal"] = metadata_url_internal
-    
+
+    # TTL (time-to-live)
+    if ttl_seconds is not None:
+        output_data["ttl_seconds"] = ttl_seconds
+    if ttl_human is not None:
+        output_data["ttl_human"] = ttl_human
+
     result["output"] = output_data
 
     # 4. WEBHOOK
@@ -1320,6 +1328,8 @@ def download_video():
                     expires_at_iso = None  # Файлы хранятся бессрочно
 
                 # Метафайл как массив из одного объекта, по требуемому формату
+                ttl_seconds = CLEANUP_TTL_SECONDS if CLEANUP_TTL_SECONDS > 0 else None
+                ttl_human = f"{CLEANUP_TTL_SECONDS // 3600}h" if CLEANUP_TTL_SECONDS >= 3600 else f"{CLEANUP_TTL_SECONDS // 60}m" if CLEANUP_TTL_SECONDS >= 60 else f"{CLEANUP_TTL_SECONDS}s"
                 meta_item = build_structured_metadata(
                     task_id=task_id,
                     status="completed",
@@ -1341,7 +1351,9 @@ def download_video():
                     metadata_url_internal=build_internal_url(f"/download/{task_id}/metadata.json"),
                     webhook_url=webhook_url,
                     webhook_headers=webhook_headers,
-                    client_meta=client_meta
+                    client_meta=client_meta,
+                    ttl_seconds=ttl_seconds,
+                    ttl_human=ttl_human
                 )
                 save_task_metadata(task_id, [meta_item])
                 resp_sync = {
@@ -1761,6 +1773,8 @@ def _background_download(
                 updates["task_download_url_internal"] = full_task_download_url_internal
             update_task(task_id, updates)
             # Метафайл как массив из одного объекта, по требуемому формату
+            ttl_seconds = CLEANUP_TTL_SECONDS if CLEANUP_TTL_SECONDS > 0 else None
+            ttl_human = f"{CLEANUP_TTL_SECONDS // 3600}h" if CLEANUP_TTL_SECONDS >= 3600 else f"{CLEANUP_TTL_SECONDS // 60}m" if CLEANUP_TTL_SECONDS >= 60 else f"{CLEANUP_TTL_SECONDS}s"
             meta_item = build_structured_metadata(
                 task_id=task_id,
                 status="completed",
@@ -1782,7 +1796,9 @@ def _background_download(
                 metadata_url_internal=build_internal_url(f"/download/{task_id}/metadata.json", base_url_internal or None),
                 webhook_url=webhook_url,
                 webhook_headers=webhook_headers,
-                client_meta=client_meta
+                client_meta=client_meta,
+                ttl_seconds=ttl_seconds,
+                ttl_human=ttl_human
             )
             save_task_metadata(task_id, [meta_item])
 
@@ -1808,7 +1824,9 @@ def _background_download(
                 metadata_url_internal=build_internal_url(f"/download/{task_id}/metadata.json", base_url_internal or None),
                 webhook_url=webhook_url,
                 webhook_headers=webhook_headers,
-                client_meta=client_meta
+                client_meta=client_meta,
+                ttl_seconds=ttl_seconds,
+                ttl_human=ttl_human
             )
             _post_webhook(webhook_payload)
         else:
