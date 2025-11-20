@@ -415,6 +415,7 @@ def build_structured_metadata(
     created_at: str,
     completed_at: str | None,
     expires_at: str | None,
+    video_url: str | None,
     video_id: str | None,
     title: str | None,
     duration: int | None,
@@ -432,14 +433,38 @@ def build_structured_metadata(
     client_meta: Any | None
 ) -> dict:
     """
-    Builds metadata object with structured, predictable field ordering.
+    Builds metadata object with unified structure matching video-processor-api.
 
-    Field groups (in order):
-    1. Task info (task_id, status, timestamps)
-    2. Input (original video info)
-    3. Output (processing result)
-    4. Webhook (webhook object with status tracking)
-    5. Client meta (always last)
+    Итоговая структура:
+    {
+      "task_id": "...",
+      "status": "completed",
+      "created_at": "...",
+      "completed_at": "..." (optional),
+      "expires_at": "..." (optional),
+      
+      "input": {
+        "video_url": "http://...",
+        "operations": ["download_video"],
+        "operations_count": 1
+      },
+      
+      "output": {
+        "output_files": [
+          {
+            "filename": "video.mp4",
+            "download_path": "/download/task-id/video.mp4",
+            "download_url": "http://external/download/task-id/video.mp4"  // если PUBLIC_BASE_URL и API_KEY
+          }
+        ],
+        "total_files": 1,
+        "metadata_url": "https://external/download/task-id/metadata.json",  // если PUBLIC_BASE_URL и API_KEY
+        "metadata_url_internal": "http://localhost:5000/download/task-id/metadata.json"  // всегда
+      },
+      
+      "webhook": {...},
+      "client_meta": {...}
+    }
     """
     result = {}
 
@@ -452,40 +477,50 @@ def build_structured_metadata(
     if expires_at is not None:
         result["expires_at"] = expires_at
 
-    # 2. INPUT (original video information)
-    input_data = {}
-    if video_id is not None:
+    # 2. INPUT (video URL и операции)
+    input_data = {
+        "video_url": video_url if video_url else None,
+        "operations": ["download_video"],
+        "operations_count": 1
+    }
+    # Дополнительная информация о видео (не обязательна)
+    if video_id:
         input_data["video_id"] = video_id
-    if title is not None:
+    if title:
         input_data["title"] = title
     if duration is not None:
         input_data["duration"] = duration
-    if resolution is not None:
+    if resolution:
         input_data["resolution"] = resolution
-    if ext is not None:
+    if ext:
         input_data["ext"] = ext
-    if input_data:  # Only add if not empty
-        result["input"] = input_data
+    result["input"] = input_data
 
-    # 3. OUTPUT (processing result)
+    # 3. OUTPUT (файлы и URL)
     output_data = {}
-    if filename is not None:
-        output_data["filename"] = filename
-    if download_endpoint is not None:
-        output_data["download_endpoint"] = download_endpoint
-    if storage_rel_path is not None:
-        output_data["storage_rel_path"] = storage_rel_path
-    # URLs (external first if available, then internal)
-    if task_download_url is not None:
-        output_data["task_download_url"] = task_download_url
-    if metadata_url is not None:
+    
+    # output_files array
+    output_files = []
+    if filename and download_endpoint:
+        file_entry = {
+            "filename": filename,
+            "download_path": download_endpoint
+        }
+        # Добавляем download_url только если есть публичный URL
+        if task_download_url:
+            file_entry["download_url"] = task_download_url
+        output_files.append(file_entry)
+    
+    output_data["output_files"] = output_files
+    output_data["total_files"] = len(output_files)
+    
+    # Metadata URLs
+    if metadata_url:
         output_data["metadata_url"] = metadata_url
-    if task_download_url_internal is not None:
-        output_data["task_download_url_internal"] = task_download_url_internal
-    if metadata_url_internal is not None:
+    if metadata_url_internal:
         output_data["metadata_url_internal"] = metadata_url_internal
-    if output_data:  # Only add if not empty
-        result["output"] = output_data
+    
+    result["output"] = output_data
 
     # 4. WEBHOOK
     if webhook_url:
@@ -1273,6 +1308,7 @@ def download_video():
                     created_at=created_at_iso,
                     completed_at=completed_at_iso,
                     expires_at=expires_at_iso,
+                    video_url=video_url,
                     video_id=info.get('id'),
                     title=info.get('title'),
                     duration=info.get('duration'),
@@ -1713,6 +1749,7 @@ def _background_download(
                 created_at=created_at_iso,
                 completed_at=completed_at_iso,
                 expires_at=expires_at_iso,
+                video_url=video_url,
                 video_id=info.get('id'),
                 title=info.get('title'),
                 duration=info.get('duration'),
