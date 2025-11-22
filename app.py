@@ -371,10 +371,52 @@ def build_download_endpoint(task_id: str, filename: str) -> str:
 def build_storage_rel_path(task_id: str, filename: str) -> str:
     return f"{task_id}/{filename}"
 
-def save_task_metadata(task_id: str, metadata: Any):
+def save_task_metadata(task_id: str, metadata: Any, verify: bool = True):
+    """
+    Сохраняет metadata в файл и опционально верифицирует запись.
+    
+    Args:
+        task_id: ID задачи
+        metadata: Данные для сохранения
+        verify: Если True, проверяет что файл записан корректно
+    
+    Returns:
+        True если запись успешна (или верификация отключена)
+    
+    Raises:
+        Exception если верификация не прошла
+    """
     meta_path = os.path.join(get_task_dir(task_id), "metadata.json")
+    
+    # Записываем данные
     with open(meta_path, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
+    
+    # Верификация записи
+    if verify:
+        try:
+            # Читаем только что записанный файл
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                verified_data = json.load(f)
+            
+            # Проверяем что данные совпадают
+            if verified_data != metadata:
+                logger.error(f"[{task_id[:8]}] METADATA VERIFICATION FAILED: Written data doesn't match")
+                logger.debug(f"[{task_id[:8]}] Expected: {json.dumps(metadata, ensure_ascii=False)[:200]}")
+                logger.debug(f"[{task_id[:8]}] Got: {json.dumps(verified_data, ensure_ascii=False)[:200]}")
+                raise Exception("Metadata verification failed: data mismatch")
+            
+            logger.debug(f"[{task_id[:8]}] Metadata verified successfully")
+            return True
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"[{task_id[:8]}] METADATA VERIFICATION FAILED: Invalid JSON: {e}")
+            raise Exception(f"Metadata verification failed: {e}")
+        except Exception as e:
+            logger.error(f"[{task_id[:8]}] METADATA VERIFICATION FAILED: {e}")
+            raise
+    
+    return True
 
 
 def build_structured_metadata(
@@ -1215,21 +1257,50 @@ def download_video():
             logger.info(f"Task created (async): {task_id} | {video_url}")
             logger.debug(f"[{task_id[:8]}] quality={quality}, webhook={'yes' if webhook_url else 'no'}")
             create_task_dirs(task_id)
+            created_at_iso = datetime.now().isoformat()
             task_data = {
                 "task_id": task_id,
                 "status": "queued",
-                "created_at": datetime.now().isoformat(),
+                "created_at": created_at_iso,
                 "video_url": video_url,
                 "quality": quality,
-                "cookies_from_browser": cookies_from_browser,
                 "client_meta": client_meta,
                 "webhook_url": webhook_url,
                 "webhook_headers": webhook_headers
             }
             save_task(task_id, task_data)
+            
+            # Создаём начальный metadata.json со статусом queued
+            logger.debug(f"[{task_id[:8]}] Creating initial metadata.json (status=queued)")
+            initial_metadata = {
+                "task_id": task_id,
+                "status": "queued",
+                "created_at": created_at_iso,
+                "input": {
+                    "url": video_url,
+                    "quality": quality
+                }
+            }
+            if webhook_url or webhook_headers:
+                webhook_obj = {}
+                if webhook_url:
+                    webhook_obj["url"] = webhook_url
+                if webhook_headers:
+                    webhook_obj["headers"] = webhook_headers
+                initial_metadata["webhook"] = webhook_obj
+            if client_meta is not None:
+                initial_metadata["client_meta"] = client_meta
+            
+            try:
+                save_task_metadata(task_id, initial_metadata, verify=True)
+                logger.info(f"[{task_id[:8]}] Initial metadata.json created and verified")
+            except Exception as e:
+                logger.error(f"[{task_id[:8]}] Failed to create initial metadata: {e}")
+                # Продолжаем работу даже если metadata.json не создался
+            
             link_base_external = (PUBLIC_BASE_URL if (PUBLIC_BASE_URL and API_KEY) else None)
             link_base_internal = (INTERNAL_BASE_URL or (request.host_url.rstrip('/') if request and hasattr(request, 'host_url') else None))
-            thread = threading.Thread(target=_background_download, args=(task_id, video_url, quality, client_meta, "download_video_async", link_base_external or "", link_base_internal or "", cookies_from_browser, webhook_url, webhook_headers))
+            thread = threading.Thread(target=_background_download, args=(task_id, video_url, quality, client_meta, "download_video_async", link_base_external or "", link_base_internal or "", webhook_url, webhook_headers))
             thread.daemon = True
             thread.start()
             # Только internal, если нет внешнего контура; иначе обе
@@ -1386,150 +1457,97 @@ def download_task_file(inner_path):
 # ============================================
 @app.route('/task_status/<task_id>', methods=['GET'])
 def task_status(task_id):
+    """
+    Возвращает статус задачи.
+    
+    Архитектура: Redis как fast cache (TTL 24h) + metadata.json как источник истины
+    
+    Приоритет источников:
+    1. Redis (0.1ms) - "горячий" кеш для всех задач первые 24 часа
+    2. metadata.json (5ms) - fallback после истечения TTL или при сбое Redis
+    3. Директория - минимальный fallback если всё остальное недоступно
+    
+    Redis синхронизируется с metadata.json на каждом этапе:
+    - queued → metadata.json + Redis
+    - downloading → metadata.json + Redis  
+    - processing → metadata.json + Redis
+    - completed → metadata.json + Redis (полная структура!)
+    - error → metadata.json + Redis
+    
+    Преимущества:
+    - 99% запросов отвечает Redis моментально (< 1ms)
+    - metadata.json используется только после TTL или для восстановления
+    - Простая логика без условий "если completed то диск"
+    """
+    
+    # ПРИОРИТЕТ 1: Redis (быстрый кеш, 99% запросов здесь)
     task = get_task(task_id)
-    if not task:
-        # Fallback 1: если есть metadata.json — читаем из него
-        meta_path = os.path.join(get_task_dir(task_id), "metadata.json")
-        try:
-            if os.path.exists(meta_path):
-                with open(meta_path, 'r', encoding='utf-8') as f:
-                    meta = json.load(f)
-                # async успешный кейс у нас — массив из одного объекта
-                if isinstance(meta, list) and meta:
-                    mi = meta[0]
-                    endpoint = mi.get('download_endpoint')
-                    resp = {
-                        "task_id": task_id,
-                        "status": mi.get('status', 'completed'),
-                        "video_id": mi.get('video_id'),
-                        "title": mi.get('title'),
-                        "filename": mi.get('filename'),
-                        "download_endpoint": endpoint,
-                        "storage_rel_path": mi.get('storage_rel_path'),
-                        "duration": mi.get('duration'),
-                        "resolution": mi.get('resolution'),
-                        "ext": mi.get('ext'),
-                        "created_at": mi.get('created_at'),
-                        "completed_at": mi.get('completed_at')
-                    }
-                    if endpoint:
-                        if PUBLIC_BASE_URL and API_KEY:
-                            resp["task_download_url"] = _join_url(PUBLIC_BASE_URL, endpoint)
-                            resp["metadata_url"] = _join_url(PUBLIC_BASE_URL, f"/download/{task_id}/metadata.json")
-                            resp["task_download_url_internal"] = build_internal_url(endpoint)
-                            resp["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json")
-                        else:
-                            resp["task_download_url_internal"] = build_internal_url(endpoint)
-                            resp["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json")
-                    # Добавляем webhook из metadata.json, если есть
-                    if mi.get('webhook') is not None:
-                        resp['webhook'] = mi.get('webhook')
-                    # client_meta всегда в конце
-                    if mi.get('client_meta') is not None:
-                        resp['client_meta'] = mi['client_meta']
-                    # Включаем состояние вебхука, если есть
-                    try:
-                        st = load_webhook_state(task_id)
-                        if st:
-                            resp['webhook_status'] = st.get('status')
-                            resp['webhook_attempts'] = int(st.get('attempts') or 0)
-                            resp['webhook_next_retry'] = st.get('next_retry')
-                    except Exception:
-                        pass
-                    return jsonify(resp)
-                # error/other — объект
-                if isinstance(meta, dict):
-                    resp = {
-                        "task_id": task_id,
-                        "status": meta.get('status', 'error'),
-                        "error_type": meta.get('error_type', 'unknown'),
-                        "error_message": meta.get('error_message', meta.get('error', 'Unknown error')),
-                        "user_action": meta.get('user_action', 'Review error manually'),
-                        "failed_at": meta.get('failed_at')
-                    }
-                    if meta.get('raw_error'):
-                        resp['raw_error'] = meta['raw_error']
-                    # Добавляем webhook из metadata.json, если есть
-                    if meta.get('webhook') is not None:
-                        resp['webhook'] = meta.get('webhook')
-                    # client_meta всегда в конце
-                    if meta.get('client_meta') is not None:
-                        resp['client_meta'] = meta['client_meta']
-                    # Включаем состояние вебхука, если есть
-                    try:
-                        st = load_webhook_state(task_id)
-                        if st:
-                            resp['webhook_status'] = st.get('status')
-                            resp['webhook_attempts'] = int(st.get('attempts') or 0)
-                            resp['webhook_next_retry'] = st.get('next_retry')
-                    except Exception:
-                        pass
-                    return jsonify(resp)
-        except Exception:
-            # игнорируем и продолжаем к следующему fallback
-            pass
-        # Fallback 2: Если папка задачи существует — считаем, что она в процессе
-        tdir = get_task_dir(task_id)
-        if os.path.isdir(tdir):
-            try:
-                created_at = datetime.fromtimestamp(os.path.getctime(tdir)).isoformat()
-            except Exception:
-                created_at = None
+    if task:
+        logger.debug(f"[{task_id[:8]}] /task_status: cache HIT (Redis), status={task.get('status')}")
+        
+        # Redis содержит актуальные данные синхронизированные с metadata.json
+        status = task.get('status')
+        
+        # Для всех статусов возвращаем данные из Redis
+        if status in ['queued', 'downloading', 'processing']:
+            # Задачи в процессе - минимальный статус
             return jsonify({
                 "task_id": task_id,
-                "status": "processing",
-                "created_at": created_at
+                "status": status,
+                "created_at": task.get('created_at')
             })
-        return jsonify({"error": "Task not found"}), 404
-    resp = {"task_id": task_id, "status": task.get('status'), "created_at": task.get('created_at')}
-    if task.get('status') == 'completed':
-        endpoint = build_download_endpoint(task_id, task.get('filename')) if task.get('filename') else None
-        resp_update = {
-            "video_id": task.get('video_id'),
-            "title": task.get('title'),
-            "filename": task.get('filename'),
-            "download_endpoint": endpoint,
-            "storage_rel_path": build_storage_rel_path(task_id, task.get('filename')) if task.get('filename') else None,
-            "duration": task.get('duration'),
-            "resolution": task.get('resolution'),
-            "ext": task.get('ext'),
-            "completed_at": task.get('completed_at')
-        }
-        if endpoint:
-            if PUBLIC_BASE_URL and API_KEY:
-                resp_update["task_download_url"] = _join_url(PUBLIC_BASE_URL, endpoint)
-                resp_update["metadata_url"] = _join_url(PUBLIC_BASE_URL, f"/download/{task_id}/metadata.json")
-                resp_update["task_download_url_internal"] = build_internal_url(endpoint)
-                resp_update["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json")
-            else:
-                resp_update["task_download_url_internal"] = build_internal_url(endpoint)
-                resp_update["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json")
-        resp.update(resp_update)
-    if task.get('status') == 'error':
-        resp['error_type'] = task.get('error_type', 'unknown')
-        resp['error_message'] = task.get('error_message', task.get('error', 'Unknown error'))
-        resp['user_action'] = task.get('user_action', 'Review error manually')
-        if task.get('raw_error'):
-            resp['raw_error'] = task.get('raw_error')
-    # Восстанавливаем webhook объект из task data (webhook_url + webhook_headers)
-    if task.get('webhook_url') is not None:
-        webhook_obj = {"url": task['webhook_url']}
-        if task.get('webhook_headers'):
-            webhook_obj["headers"] = task['webhook_headers']
-        resp['webhook'] = webhook_obj
-    # client_meta всегда строго последним
-    if task.get('client_meta') is not None:
-        resp['client_meta'] = task['client_meta']
-    # Включаем состояние вебхука, если есть
+        
+        if status == 'completed':
+            # Завершённые задачи - полная структура из Redis
+            # (синхронизирована с metadata.json при завершении)
+            return jsonify(task.get('metadata', task))
+        
+        if status == 'error':
+            # Ошибки - полная структура из Redis
+            return jsonify(task.get('metadata', task))
+        
+        # Fallback для неизвестных статусов
+        return jsonify(task)
+    
+    # ПРИОРИТЕТ 2: metadata.json (fallback после TTL или сбоя Redis)
+    logger.debug(f"[{task_id[:8]}] /task_status: cache MISS (Redis), checking disk")
+    meta_path = os.path.join(get_task_dir(task_id), "metadata.json")
     try:
-        st = load_webhook_state(task_id)
-        if st:
-            resp['webhook_status'] = st.get('status')
-            resp['webhook_attempts'] = int(st.get('attempts') or 0)
-            resp['webhook_next_retry'] = st.get('next_retry')
-    except Exception:
-        pass
-    return jsonify(resp)
+        if os.path.exists(meta_path):
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+            
+            logger.info(f"[{task_id[:8]}] /task_status: returning from disk (Redis TTL expired or unavailable)")
+            
+            # Успешное выполнение - массив из одного объекта
+            if isinstance(meta, list) and meta:
+                return jsonify(meta[0])
+            
+            # Ошибка - объект с error информацией
+            if isinstance(meta, dict):
+                return jsonify(meta)
+    except Exception as e:
+        logger.warning(f"[{task_id[:8]}] /task_status: failed to read metadata.json: {e}")
+        # Продолжаем к последнему fallback
+    
+    # ПРИОРИТЕТ 3: Директория задачи (последний шанс)
+    tdir = get_task_dir(task_id)
+    if os.path.isdir(tdir):
+        logger.warning(f"[{task_id[:8]}] /task_status: task directory exists but no data (Redis/disk issue)")
+        try:
+            created_at = datetime.fromtimestamp(os.path.getctime(tdir)).isoformat()
+        except Exception:
+            created_at = None
+        
+        return jsonify({
+            "task_id": task_id,
+            "status": "processing",
+            "created_at": created_at
+        })
+    
+    # Задача не найдена
+    logger.warning(f"[{task_id[:8]}] /task_status: task not found (no Redis, no metadata.json, no directory)")
+    return jsonify({"error": "Task not found"}), 404
 
 def _background_download(
     task_id: str,
@@ -1539,7 +1557,6 @@ def _background_download(
     operation: str = "download_video_async",
     base_url_external: str = "",
     base_url_internal: str = "",
-    cookies_from_browser: str = None,
     webhook_url: str | None = None,
     webhook_headers: dict | None = None
 ):
@@ -1633,6 +1650,22 @@ def _background_download(
         logger.info(f"[{task_id[:8]}] Download started")
         logger.debug(f"[{task_id[:8]}] url={video_url}, quality={quality}")
         update_task(task_id, {"status": "downloading"})
+        
+        # Обновляем metadata.json: queued -> downloading
+        try:
+            meta_path = os.path.join(get_task_dir(task_id), "metadata.json")
+            if os.path.exists(meta_path):
+                with open(meta_path, 'r', encoding='utf-8') as f:
+                    current_meta = json.load(f)
+                current_meta["status"] = "downloading"
+                current_meta["started_at"] = datetime.now().isoformat()
+                save_task_metadata(task_id, current_meta, verify=True)
+                logger.info(f"[{task_id[:8]}] Metadata updated: queued -> downloading")
+            else:
+                logger.warning(f"[{task_id[:8]}] metadata.json not found, skipping update")
+        except Exception as e:
+            logger.error(f"[{task_id[:8]}] Failed to update metadata (downloading): {e}")
+        
         safe_filename = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         outtmpl = os.path.join(get_task_output_dir(task_id), f"{safe_filename}.%(ext)s")
         ydl_opts = _prepare_ydl_opts(task_id, video_url, quality, outtmpl)
@@ -1642,6 +1675,29 @@ def _background_download(
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
             ext = info.get('ext', 'mp4')
+
+        # Обновляем metadata.json после получения информации о видео
+        try:
+            meta_path = os.path.join(get_task_dir(task_id), "metadata.json")
+            if os.path.exists(meta_path):
+                with open(meta_path, 'r', encoding='utf-8') as f:
+                    current_meta = json.load(f)
+                current_meta["status"] = "processing"
+                current_meta["video_info_retrieved_at"] = datetime.now().isoformat()
+                # Добавляем информацию о видео
+                if "output" not in current_meta:
+                    current_meta["output"] = {}
+                current_meta["output"]["video_id"] = info.get('id')
+                current_meta["output"]["title"] = info.get('title')
+                current_meta["output"]["duration"] = info.get('duration')
+                current_meta["output"]["resolution"] = info.get('resolution')
+                current_meta["output"]["ext"] = ext
+                save_task_metadata(task_id, current_meta, verify=True)
+                logger.info(f"[{task_id[:8]}] Metadata updated: video info added")
+            else:
+                logger.warning(f"[{task_id[:8]}] metadata.json not found for video info update")
+        except Exception as e:
+            logger.error(f"[{task_id[:8]}] Failed to update metadata (video info): {e}")
 
         filename = f"{safe_filename}.{ext}"
         file_path = os.path.join(get_task_output_dir(task_id), filename)
@@ -1719,35 +1775,30 @@ def _background_download(
                 ttl_seconds=ttl_seconds,
                 ttl_human=ttl_human
             )
-            save_task_metadata(task_id, [meta_item])
+            
+            # Сохраняем финальный metadata.json с верификацией
+            logger.info(f"[{task_id[:8]}] Saving final metadata.json (status=completed)")
+            logger.debug(f"[{task_id[:8]}] Final metadata keys: {list(meta_item.keys())}")
+            try:
+                save_task_metadata(task_id, [meta_item], verify=True)
+                logger.info(f"[{task_id[:8]}] ✓ Final metadata.json saved and verified successfully")
+            except Exception as e:
+                logger.error(f"[{task_id[:8]}] ✗ CRITICAL: Failed to save final metadata: {e}")
+                raise
+            
+            # Синхронизируем Redis с metadata.json для быстрого доступа (cache)
+            try:
+                update_task(task_id, {
+                    "status": "completed",
+                    "metadata": meta_item  # Полная структура для моментального ответа
+                })
+                logger.debug(f"[{task_id[:8]}] ✓ Redis synchronized with metadata.json")
+            except Exception as e:
+                logger.warning(f"[{task_id[:8]}] Failed to sync Redis (non-critical): {e}")
+                # Не критично - metadata.json уже сохранён
 
-            # webhook payload теперь строго build_structured_metadata (единый формат)
-            webhook_payload = build_structured_metadata(
-                task_id=task_id,
-                status="completed",
-                created_at=created_at_iso,
-                completed_at=completed_at_iso,
-                expires_at=expires_at_iso,
-                video_url=video_url,
-                video_id=info.get('id'),
-                title=info.get('title'),
-                duration=info.get('duration'),
-                resolution=info.get('resolution'),
-                ext=ext,
-                filename=filename,
-                download_endpoint=download_endpoint,
-                storage_rel_path=storage_rel_path,
-                task_download_url=full_task_download_url if base_url_external else None,
-                task_download_url_internal=full_task_download_url_internal,
-                metadata_url=build_absolute_url(f"/download/{task_id}/metadata.json", base_url_external) if base_url_external else None,
-                metadata_url_internal=build_internal_url(f"/download/{task_id}/metadata.json", base_url_internal or None),
-                webhook_url=webhook_url,
-                webhook_headers=webhook_headers,
-                client_meta=client_meta,
-                ttl_seconds=ttl_seconds,
-                ttl_human=ttl_human
-            )
-            _post_webhook(webhook_payload)
+            # Webhook просто получает то же содержимое что и metadata.json
+            _post_webhook(meta_item)
         else:
             logger.error(f"[{task_id[:8]}] DOWNLOAD FAILED: File not downloaded")
             error_info = classify_youtube_error("File not downloaded")
@@ -1768,19 +1819,6 @@ def _background_download(
             }
             if client_meta is not None:
                 metadata['client_meta'] = client_meta
-            if webhook_url:
-                metadata['webhook_url'] = webhook_url
-            save_task_metadata(task_id, metadata)
-            # webhook об ошибке
-            payload = {
-                "task_id": task_id,
-                "status": "error",
-                "operation": operation,
-                "error_type": error_info["error_type"],
-                "error_message": error_info["error_message"],
-                "user_action": error_info["user_action"],
-                "failed_at": datetime.now().isoformat()
-            }
             # Добавляем webhook объект если есть
             if webhook_url or webhook_headers:
                 webhook_obj = {}
@@ -1788,10 +1826,27 @@ def _background_download(
                     webhook_obj["url"] = webhook_url
                 if webhook_headers:
                     webhook_obj["headers"] = webhook_headers
-                payload["webhook"] = webhook_obj
-            if client_meta is not None:
-                payload['client_meta'] = client_meta
-            _post_webhook(payload)
+                metadata["webhook"] = webhook_obj
+            
+            logger.error(f"[{task_id[:8]}] Saving error metadata (file not downloaded)")
+            try:
+                save_task_metadata(task_id, metadata, verify=True)
+                logger.info(f"[{task_id[:8]}] ✓ Error metadata saved and verified")
+            except Exception as meta_err:
+                logger.error(f"[{task_id[:8]}] ✗ CRITICAL: Failed to save error metadata: {meta_err}")
+            
+            # Синхронизируем Redis с metadata.json
+            try:
+                update_task(task_id, {
+                    "status": "error",
+                    "metadata": metadata  # Полная структура ошибки
+                })
+                logger.debug(f"[{task_id[:8]}] ✓ Redis synchronized with error metadata")
+            except Exception as e:
+                logger.warning(f"[{task_id[:8]}] Failed to sync Redis (non-critical): {e}")
+            
+            # webhook об ошибке - отправляем metadata напрямую
+            _post_webhook(metadata)
     except Exception as e:
         error_info = classify_youtube_error(str(e))
         logger.error(f"[{task_id[:8]}] DOWNLOAD EXCEPTION: type={error_info['error_type']}, msg={error_info['error_message'][:100]}")
@@ -1816,29 +1871,26 @@ def _background_download(
             metadata['client_meta'] = client_meta
         if webhook_url:
             metadata['webhook_url'] = webhook_url
-        save_task_metadata(task_id, metadata)
-        # webhook об ошибке
-        payload = {
-            "task_id": task_id,
-            "status": "error",
-            "operation": operation,
-            "error_type": error_info["error_type"],
-            "error_message": error_info["error_message"],
-            "user_action": error_info["user_action"],
-            "raw_error": str(e)[:1000],
-            "failed_at": datetime.now().isoformat()
-        }
-        # Добавляем webhook объект если есть
-        if webhook_url or webhook_headers:
-            webhook_obj = {}
-            if webhook_url:
-                webhook_obj["url"] = webhook_url
-            if webhook_headers:
-                webhook_obj["headers"] = webhook_headers
-            payload["webhook"] = webhook_obj
-        if client_meta is not None:
-            payload['client_meta'] = client_meta
-        _post_webhook(payload)
+        
+        logger.error(f"[{task_id[:8]}] Saving error metadata (exception: {error_info['error_type']})")
+        try:
+            save_task_metadata(task_id, metadata, verify=True)
+            logger.info(f"[{task_id[:8]}] ✓ Error metadata saved and verified")
+        except Exception as meta_err:
+            logger.error(f"[{task_id[:8]}] ✗ CRITICAL: Failed to save error metadata: {meta_err}")
+        
+        # Синхронизируем Redis с metadata.json
+        try:
+            update_task(task_id, {
+                "status": "error",
+                "metadata": metadata  # Полная структура ошибки для быстрого доступа
+            })
+            logger.debug(f"[{task_id[:8]}] ✓ Redis synchronized with error metadata")
+        except Exception as sync_err:
+            logger.warning(f"[{task_id[:8]}] Failed to sync Redis (non-critical): {sync_err}")
+        
+        # Webhook просто получает то же содержимое что и metadata.json
+        _post_webhook(metadata)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)
