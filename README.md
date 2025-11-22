@@ -327,32 +327,8 @@ GET /download/<task_id>/metadata.json
 | ~~`WORKERS`~~ | `2` | ❌ **Not configurable** in public version. Fixed at 2 workers. |
 | `GUNICORN_TIMEOUT` | `300` | Gunicorn timeout (seconds). |
 | **Redis Configuration** |||
-| ~~`REDIS_HOST`~~ | `localhost` | ❌ **Not configurable** in public version. Embedded Redis. |
-| ~~`REDIS_PORT`~~ | `6379` | ❌ **Not configurable** in public version. Embedded Redis. |
-| ~~`REDIS_DB`~~ | `0` | ❌ **Not configurable** in public version. Embedded Redis. |
-| ~~`REDIS_INIT_RETRIES`~~ | `10` | ❌ **Not configurable** in public version. Embedded Redis. |
-| ~~`REDIS_INIT_DELAY_SECONDS`~~ | `1` | ❌ **Not configurable** in public version. Embedded Redis. |
-| **Task Management** |||
-| ~~`CLEANUP_TTL_SECONDS`~~ | `86400` | ❌ **Not configurable** in public version. Fixed at 24 hours. |
-| **Webhook Configuration** |||
-| ~~`WEBHOOK_RETRY_ATTEMPTS`~~ | `3` | ⚙️ **Hardcoded** in public version. Max webhook delivery attempts (immediate retries on error). Configurable in Pro. |
-| ~~`WEBHOOK_RETRY_INTERVAL_SECONDS`~~ | `5` | ⚙️ **Hardcoded** in public version. Delay between immediate webhook retries (seconds). Configurable in Pro. |
-| ~~`WEBHOOK_TIMEOUT_SECONDS`~~ | `8` | ⚙️ **Hardcoded** in public version. Webhook request timeout (seconds). Configurable in Pro. |
-| ~~`WEBHOOK_BACKGROUND_INTERVAL_SECONDS`~~ | `900` | ⚙️ **Hardcoded** in public version. Background resender scans every 15 minutes (fixed). Configurable in Pro. |
-| ~~`WEBHOOK_HEADERS`~~ | — | ❌ **Not available** in public version. Use per-request `webhook.headers` field instead. Available in Pro version. |
-| ~~`DEFAULT_WEBHOOK_URL`~~ | — | ❌ **Not available** in public version. Specify `webhook.url` in each request. Available in Pro version. |
 | **Logging** |||
 | `LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL). |
-| ~~`PROGRESS_LOG`~~ | `off` | ⚙️ **Hardcoded** in public version. yt-dlp progress logging always off. Configurable in Pro. |
-| ~~`PROGRESS_STEP`~~ | `10` | ⚙️ **Hardcoded** in public version. Progress step in % for compact mode. Configurable in Pro. |
-| ~~`LOG_YTDLP_OPTS`~~ | `false` | ⚙️ **Hardcoded** in public version. yt-dlp options logging disabled. Configurable in Pro. |
-| ~~`LOG_YTDLP_WARNINGS`~~ | `false` | ⚙️ **Hardcoded** in public version. yt-dlp warnings forwarding disabled. Configurable in Pro. |
-| **Client Metadata Limits** (hardcoded) |||
-| ~~`MAX_CLIENT_META_BYTES`~~ | `16384` | ⚙️ **Hardcoded** in public version. Max size for `client_meta` (bytes). Configurable in Pro. |
-| ~~`MAX_CLIENT_META_DEPTH`~~ | `5` | ⚙️ **Hardcoded** in public version. Max nesting depth for `client_meta`. Configurable in Pro. |
-| ~~`MAX_CLIENT_META_KEYS`~~ | `200` | ⚙️ **Hardcoded** in public version. Max keys in `client_meta` object. Configurable in Pro. |
-| ~~`MAX_CLIENT_META_STRING_LENGTH`~~ | `1000` | ⚙️ **Hardcoded** in public version. Max string value length. Configurable in Pro. |
-| ~~`MAX_CLIENT_META_LIST_LENGTH`~~ | `200` | ⚙️ **Hardcoded** in public version. Max list length. Configurable in Pro. |
 
 ### URL Configuration
 
