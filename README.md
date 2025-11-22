@@ -311,35 +311,6 @@ GET /download/<task_id>/<filename>
 GET /download/<task_id>/metadata.json
 ```
 
-### 5. Get Video Info
-
-```bash
-POST /get_video_info
-Content-Type: application/json
-
-{
-  "url": "https://www.youtube.com/watch?v=VIDEO_ID"
-}
-```
-
-**Response:**
-```json
-{
-  "video_id": "VIDEO_ID",
-  "title": "Video Title",
-  "description": "Description...",
-  "duration": 180,
-  "view_count": 1000000,
-  "like_count": 50000,
-  "uploader": "Channel Name",
-  "upload_date": "20240115",
-  "thumbnail": "https://...",
-  "tags": ["tag1", "tag2"],
-  "available_formats": 25,
-  "processed_at": "2024-01-15T10:30:00.123456"
-}
-```
-
 ---
 
 ## Configuration
@@ -823,7 +794,7 @@ services:
 
 **Solutions:**
 - If `API_KEY` is set, all protected endpoints require `Authorization: Bearer <key>`
-- Protected endpoints: `/download_video`, `/get_video_info`
+- Protected endpoint: `/download_video`
 - Public endpoints (no auth): `/health`, `/task_status`, `/download`
 - If using internal Docker mode, unset `API_KEY` entirely
 

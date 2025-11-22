@@ -498,47 +498,6 @@ API автоматически вернёт абсолютные URL. Для в�
 - Пользовательские tracing/correlation ID
 - Заголовки идентификации клиента
 
-### 8. Получить информацию о видео
-
-```bash
-POST /get_video_info
-Content-Type: application/json
-
-{
-  "url": "https://www.youtube.com/watch?v=VIDEO_ID"
-}
-```
-
-Ответ:
-```json
-{
-  "video_id": "VIDEO_ID",
-  "title": "Название видео",
-  "description": "Описание...",
-  "duration": 180,
-  "view_count": 1000000,
-  "like_count": 50000,
-  "uploader": "Channel Name",
-  "upload_date": "20240115",
-  "thumbnail": "https://...",
-  "tags": ["tag1", "tag2"],
-  "available_formats": 25,
-  "processed_at": "2024-01-15T10:30:00.123456"
-  "video_id": "VIDEO_ID",
-  "title": "Название видео",
-  "description": "Описание...",
-  "duration": 180,
-  "view_count": 1000000,
-  "like_count": 50000,
-  "uploader": "Channel Name",
-  "upload_date": "20240115",
-  "thumbnail": "https://...",
-  "tags": ["tag1", "tag2"],
-  "available_formats": 25,
-  "processed_at": "2024-01-15T10:30:00.123456"
-}
-```
-
 ## Примеры использования
 
 ### cURL
@@ -549,12 +508,6 @@ curl -X POST http://localhost:5000/download_video \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_KEY" \
   -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "quality": "best[height<=480]"}'
-
-# Получить информацию
-curl -X POST http://localhost:5000/get_video_info \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $API_KEY" \
-  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
 ```
 
 ### Python
@@ -856,7 +809,7 @@ docker run -d -p 5000:5000 \
 
 **Решения:**
 - Если `API_KEY` задан, все защищённые endpoints требуют `Authorization: Bearer <key>`
-- Защищённые endpoints: `/download_video`, `/get_video_info`
+- Защищённый endpoint: `/download_video`
 - Публичные endpoints (без авторизации): `/health`, `/task_status`, `/download`
 - Если используется внутренний Docker режим, полностью уберите `API_KEY`
 
