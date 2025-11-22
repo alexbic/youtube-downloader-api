@@ -58,11 +58,6 @@ curl http://localhost:5000/health
 curl -X POST http://localhost:5000/download_video \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
-
-# Get direct URL
-curl -X POST http://localhost:5000/get_direct_url \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
 ```
 
 ---
@@ -164,40 +159,66 @@ Content-Type: application/json
   - `url` (required, string) - webhook callback URL
   - `headers` (optional, object) - custom headers for webhook authentication
 - `client_meta` (optional, object) - arbitrary JSON metadata (max 16KB)
-- `cookiesFromBrowser` (optional, string) - browser to extract cookies from (chrome/firefox/safari/edge, local only)
 
-**Response (sync):**
+**Response (sync) - Unified metadata structure:**
 ```json
 {
   "task_id": "abc123...",
   "status": "completed",
-  "video_id": "VIDEO_ID",
-  "title": "Video Title",
-  "filename": "video_20250116_120000.mp4",
-  "file_size": 15728640,
-  "download_endpoint": "/download/abc123.../video_20250116_120000.mp4",
-  "storage_rel_path": "abc123.../video_20250116_120000.mp4",
-  "task_download_url": "http://public.example.com/download/abc123.../video_20250116_120000.mp4",
-  "task_download_url_internal": "http://service.local:5000/download/abc123.../video_20250116_120000.mp4",
-  "metadata_url": "http://public.example.com/download/abc123.../metadata.json",
-  "metadata_url_internal": "http://service.local:5000/download/abc123.../metadata.json",
-  "duration": 180,
-  "resolution": "1280x720",
-  "ext": "mp4",
-  "processed_at": "2025-01-16T12:00:00.123456",
+  "created_at": "2025-01-16T12:00:00.123456",
+  "completed_at": "2025-01-16T12:00:10.123456",
+  "expires_at": "2025-01-17T12:00:00.123456",
+  
+  "input": {
+    "video_url": "https://www.youtube.com/watch?v=VIDEO_ID",
+    "operations": ["download_video"],
+    "operations_count": 1,
+    "video_id": "VIDEO_ID",
+    "title": "Video Title",
+    "duration": 180,
+    "resolution": "1280x720",
+    "ext": "mp4"
+  },
+  
+  "output": {
+    "output_files": [
+      {
+        "filename": "video_20250116_120000.mp4",
+        "download_path": "/download/abc123.../video_20250116_120000.mp4",
+        "download_url_internal": "http://service.local:5000/download/abc123.../video_20250116_120000.mp4",
+        "download_url": "http://public.example.com/download/abc123.../video_20250116_120000.mp4",
+        "expires_at": "2025-01-17T12:00:00.123456"
+      }
+    ],
+    "total_files": 1,
+    "metadata_url": "http://public.example.com/download/abc123.../metadata.json",
+    "metadata_url_internal": "http://service.local:5000/download/abc123.../metadata.json",
+    "ttl_seconds": 86400,
+    "ttl_human": "24h"
+  },
+  
+  "webhook": null,
   "client_meta": {"user_id": 123}
 }
 ```
 
-**Response (async):**
+> **Note on URLs:** 
+> - `download_url_internal` and `metadata_url_internal` - always present (Docker network URLs)
+> - `download_url` and `metadata_url` - only present when **both** `PUBLIC_BASE_URL` **and** `API_KEY` are configured
+
+**Response (async) - Minimal tracking structure:**
 ```json
 {
   "task_id": "abc123...",
   "status": "processing",
   "check_status_url": "http://public.example.com/task_status/abc123...",
-  "check_status_url_internal": "http://service.local/task_status/abc123...",
   "metadata_url": "http://public.example.com/download/abc123.../metadata.json",
+  "check_status_url_internal": "http://service.local/task_status/abc123...",
   "metadata_url_internal": "http://service.local/download/abc123.../metadata.json",
+  "webhook": {
+    "url": "https://your-webhook.com/callback",
+    "headers": {"X-API-Key": "***"}
+  },
   "client_meta": {"user_id": 123}
 }
 ```
@@ -218,27 +239,52 @@ GET /task_status/<task_id>
 }
 ```
 
-**Response (completed):**
+**Response (completed) - Same unified structure as sync mode:**
 ```json
 {
   "task_id": "abc123...",
   "status": "completed",
-  "video_id": "VIDEO_ID",
-  "title": "Video Title",
-  "filename": "video_20250116_120000.mp4",
-  "file_size": 15728640,
-  "download_endpoint": "/download/abc123.../video_20250116_120000.mp4",
-  "storage_rel_path": "abc123.../video_20250116_120000.mp4",
-  "task_download_url": "http://public.example.com/download/abc123.../video_20250116_120000.mp4",
-  "task_download_url_internal": "http://service.local:5000/download/abc123.../video_20250116_120000.mp4",
-  "metadata_url": "http://public.example.com/download/abc123.../metadata.json",
-  "metadata_url_internal": "http://service.local:5000/download/abc123.../metadata.json",
-  "duration": 180,
-  "resolution": "1280x720",
-  "ext": "mp4",
   "created_at": "2025-01-16T12:00:00.123456",
   "completed_at": "2025-01-16T12:00:10.123456",
   "expires_at": "2025-01-17T12:00:00.123456",
+  
+  "input": {
+    "video_url": "https://www.youtube.com/watch?v=VIDEO_ID",
+    "operations": ["download_video"],
+    "operations_count": 1,
+    "video_id": "VIDEO_ID",
+    "title": "Video Title",
+    "duration": 180,
+    "resolution": "1280x720",
+    "ext": "mp4"
+  },
+  
+  "output": {
+    "output_files": [
+      {
+        "filename": "video_20250116_120000.mp4",
+        "download_path": "/download/abc123.../video_20250116_120000.mp4",
+        "download_url_internal": "http://service.local:5000/download/abc123.../video_20250116_120000.mp4",
+        "download_url": "http://public.example.com/download/abc123.../video_20250116_120000.mp4",
+        "expires_at": "2025-01-17T12:00:00.123456"
+      }
+    ],
+    "total_files": 1,
+    "metadata_url": "http://public.example.com/download/abc123.../metadata.json",
+    "metadata_url_internal": "http://service.local:5000/download/abc123.../metadata.json",
+    "ttl_seconds": 86400,
+    "ttl_human": "24h"
+  },
+  
+  "webhook": {
+    "url": "https://your-webhook.com/callback",
+    "headers": {"X-API-Key": "***"},
+    "status": "delivered",
+    "attempts": 1,
+    "last_attempt": "2025-01-16T12:00:11.123456",
+    "last_status": 200,
+    "task_id": "abc123..."
+  },
   "client_meta": {"user_id": 123}
 }
 ```
@@ -265,41 +311,7 @@ GET /download/<task_id>/<filename>
 GET /download/<task_id>/metadata.json
 ```
 
-### 5. Get Direct URL
-
-```bash
-POST /get_direct_url
-Content-Type: application/json
-
-{
-  "url": "https://www.youtube.com/watch?v=VIDEO_ID",
-  "quality": "best[height<=720]"
-}
-```
-
-**Response:**
-```json
-{
-  "video_id": "VIDEO_ID",
-  "title": "Video Title",
-  "direct_url": "https://...",
-  "duration": 180,
-  "filesize": 15728640,
-  "ext": "mp4",
-  "resolution": "1280x720",
-  "fps": 30,
-  "thumbnail": "https://...",
-  "uploader": "Channel Name",
-  "upload_date": "20240115",
-  "http_headers": {"User-Agent": "..."},
-  "expiry_warning": "URL expires in a few hours. Use immediately or call /download_video to save permanently.",
-  "processed_at": "2024-01-15T10:30:00.123456"
-}
-```
-
-**Warning:** Direct URLs have limited lifetime and may return 403 Forbidden. For reliable downloads, use `/download_video`.
-
-### 6. Get Video Info
+### 5. Get Video Info
 
 ```bash
 POST /get_video_info
@@ -658,17 +670,6 @@ Note: Delivery uses retry policy (`WEBHOOK_RETRY_ATTEMPTS`, `WEBHOOK_RETRY_INTER
 ### cURL
 
 ```bash
-# Get direct URL (no auth)
-curl -X POST http://localhost:5000/get_direct_url \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
-
-# With auth (Bearer)
-curl -X POST http://localhost:5000/get_direct_url \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $API_KEY" \
-  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
-
 # Download video
 curl -X POST http://localhost:5000/download_video \
   -H "Content-Type: application/json" \
@@ -680,15 +681,6 @@ curl -X POST http://localhost:5000/download_video \
 
 ```python
 import requests
-
-# Get direct URL
-response = requests.post('http://localhost:5000/get_direct_url', json={
-    'url': 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-    'quality': 'best[height<=720]'
-})
-
-data = response.json()
-print(f"Direct URL: {data['direct_url']}")
 
 # Download video
 response = requests.post('http://localhost:5000/download_video', json={
@@ -704,16 +696,6 @@ print(f"Download URL: {data['task_download_url']}")
 
 ```javascript
 const axios = require('axios');
-
-// Get direct URL
-async function getDirectUrl(videoUrl) {
-  const response = await axios.post('http://localhost:5000/get_direct_url', {
-    url: videoUrl,
-    quality: 'best[height<=720]'
-  });
-
-  return response.data.direct_url;
-}
 
 // Download video (async mode)
 async function downloadVideo(videoUrl) {
@@ -841,7 +823,7 @@ services:
 
 **Solutions:**
 - If `API_KEY` is set, all protected endpoints require `Authorization: Bearer <key>`
-- Protected endpoints: `/download_video`, `/get_direct_url`, `/get_video_info`
+- Protected endpoints: `/download_video`, `/get_video_info`
 - Public endpoints (no auth): `/health`, `/task_status`, `/download`
 - If using internal Docker mode, unset `API_KEY` entirely
 

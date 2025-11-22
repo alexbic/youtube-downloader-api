@@ -303,7 +303,7 @@ def _make_progress_hook(task_id: str, step: int = 10):
             pass
     return hook
 
-def _prepare_ydl_opts(task_id: str | None, video_url: str, quality: str, outtmpl: str, cookies_from_browser: str | None):
+def _prepare_ydl_opts(task_id: str | None, video_url: str, quality: str, outtmpl: str):
     ydl_opts = {
         'format': quality,
         'outtmpl': outtmpl,
@@ -333,9 +333,7 @@ def _prepare_ydl_opts(task_id: str | None, video_url: str, quality: str, outtmpl
                 _make_progress_hook(task_id, max(1, PROGRESS_STEP))
             ]
 
-    if cookies_from_browser:
-        ydl_opts['cookiesfrombrowser'] = (cookies_from_browser,)
-    elif os.path.exists(COOKIES_PATH):
+    if os.path.exists(COOKIES_PATH):
         touch_cookies()  # Обновляем временные метки перед использованием
         ydl_opts['cookiefile'] = COOKIES_PATH
 
@@ -503,8 +501,6 @@ def build_structured_metadata(
         output_data["ttl_seconds"] = ttl_seconds
     if ttl_human is not None:
         output_data["ttl_human"] = ttl_human
-    if expires_at is not None:
-        output_data["expires_at"] = expires_at
 
     result["output"] = output_data
 
@@ -1151,43 +1147,6 @@ def health_check():
     })
 
 # ============================================
-# GET DIRECT URL
-# ============================================
-@app.route('/get_direct_url', methods=['POST'])
-@require_api_key
-def get_direct_url():
-    try:
-        data = request.json or {}
-        video_url = data.get('url')
-        quality = data.get('quality', 'best[height<=720]')
-        if not video_url:
-            return jsonify({"error": "URL is required"}), 400
-        touch_cookies()  # Обновляем временные метки cookies
-        ydl_opts = {'format': quality,'quiet': True,'no_warnings': True}
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=False)
-            http_headers = info.get('http_headers', {})
-            return jsonify({
-                "video_id": info.get('id'),
-                "title": info.get('title'),
-                "direct_url": info.get('url'),
-                "duration": info.get('duration'),
-                "filesize": info.get('filesize'),
-                "filesize_approx": info.get('filesize_approx'),
-                "ext": info.get('ext'),
-                "resolution": info.get('resolution'),
-                "fps": info.get('fps'),
-                "thumbnail": info.get('thumbnail'),
-                "uploader": info.get('uploader'),
-                "upload_date": info.get('upload_date'),
-                "http_headers": http_headers,
-                "expiry_warning": "URL expires in a few hours. Use immediately or call /download_video to save permanently.",
-                "processed_at": datetime.now().isoformat()
-            })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ============================================
 # SYNC DOWNLOAD (download_video)
 # ============================================
 @app.route('/download_video', methods=['POST'])
@@ -1197,7 +1156,6 @@ def download_video():
         data = request.json or {}
         video_url = data.get('url')
         quality = data.get('quality', 'best[height<=720]')
-        cookies_from_browser = data.get('cookiesFromBrowser')
         # Webhook - только новый формат (объект с url и headers)
         webhook = data.get('webhook')
         webhook_url = None
@@ -1313,7 +1271,7 @@ def download_video():
         create_task_dirs(task_id)
         safe_filename = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         outtmpl = os.path.join(get_task_output_dir(task_id), f'{safe_filename}.%(ext)s')
-        ydl_opts = _prepare_ydl_opts(task_id, video_url, quality, outtmpl, cookies_from_browser)
+        ydl_opts = _prepare_ydl_opts(task_id, video_url, quality, outtmpl)
         if LOG_YTDLP_OPTS:
             logger.debug(f"[{task_id[:8]}] yt-dlp opts: {ydl_opts}")
         try:
@@ -1369,31 +1327,8 @@ def download_video():
                     ttl_human=ttl_human
                 )
                 save_task_metadata(task_id, [meta_item])
-                resp_sync = {
-                    "task_id": task_id,
-                    "status": "completed",
-                    "video_id": info.get('id'),
-                    "title": info.get('title'),
-                    "filename": filename,
-                    "file_size": file_size,
-                    "download_endpoint": download_endpoint,
-                    "storage_rel_path": storage_rel_path,
-                    "duration": info.get('duration'),
-                    "resolution": info.get('resolution'),
-                    "ext": ext,
-                    "created_at": created_at_iso,
-                    "processed_at": completed_at_iso
-                }
-                if PUBLIC_BASE_URL and API_KEY:
-                    resp_sync["task_download_url"] = task_download_url
-                    resp_sync["metadata_url"] = build_absolute_url(f"/download/{task_id}/metadata.json")
-                    resp_sync["task_download_url_internal"] = task_download_url_internal
-                    resp_sync["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json")
-                else:
-                    resp_sync["task_download_url_internal"] = task_download_url_internal
-                    resp_sync["metadata_url_internal"] = build_internal_url(f"/download/{task_id}/metadata.json")
-                resp_sync["client_meta"] = client_meta
-                return jsonify(resp_sync)
+                # Возвращаем унифицированную структуру (как в metadata.json)
+                return jsonify(meta_item)
             return jsonify({"error": "No file downloaded"}), 500
         except Exception as e:
             error_info = classify_youtube_error(str(e))
@@ -1446,35 +1381,6 @@ def download_task_file(inner_path):
 # ============================================
 # VIDEO INFO
 # ============================================
-@app.route('/get_video_info', methods=['POST'])
-@require_api_key
-def get_video_info():
-    try:
-        data = request.json or {}
-        video_url = data.get('url')
-        if not video_url:
-            return jsonify({"error": "URL is required"}), 400
-        touch_cookies()  # Обновляем временные метки cookies
-        ydl_opts = {'quiet': True,'no_warnings': True}
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=False)
-            return jsonify({
-                "video_id": info.get('id'),
-                "title": info.get('title'),
-                "description": info.get('description', '')[:500],
-                "duration": info.get('duration'),
-                "view_count": info.get('view_count'),
-                "like_count": info.get('like_count'),
-                "uploader": info.get('uploader'),
-                "upload_date": info.get('upload_date'),
-                "thumbnail": info.get('thumbnail'),
-                "tags": info.get('tags', [])[:10],
-                "available_formats": len(info.get('formats', [])),
-                "processed_at": datetime.now().isoformat()
-            })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 # ============================================
 # TASK STATUS
 # ============================================
@@ -1729,7 +1635,7 @@ def _background_download(
         update_task(task_id, {"status": "downloading"})
         safe_filename = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         outtmpl = os.path.join(get_task_output_dir(task_id), f"{safe_filename}.%(ext)s")
-        ydl_opts = _prepare_ydl_opts(task_id, video_url, quality, outtmpl, cookies_from_browser)
+        ydl_opts = _prepare_ydl_opts(task_id, video_url, quality, outtmpl)
         if LOG_YTDLP_OPTS:
             logger.debug(f"[{task_id[:8]}] yt-dlp opts: {ydl_opts}")
 

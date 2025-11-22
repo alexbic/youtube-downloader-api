@@ -58,11 +58,6 @@ curl http://localhost:5000/health
 curl -X POST http://localhost:5000/download_video \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
-
-# Получить прямую ссылку
-curl -X POST http://localhost:5000/get_direct_url \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
 ```
 
 ---
@@ -220,7 +215,6 @@ Content-Type: application/json
 - `url` (обязательный) — ссылка на YouTube
 - `async` (опциональный, bool) — если true, задача выполняется асинхронно, иначе синхронно
 - `quality` (опциональный, string) — формат yt-dlp, по умолчанию `best[height<=720]`
-- `cookiesFromBrowser` (опциональный, string) — браузер для извлечения cookies (`chrome`, `firefox`, `safari`, `edge`; работает только локально, не в Docker)
 - `client_meta` (опциональный, object) — любые ваши метаданные; сохраняются в `metadata.json` и возвращаются в ответе
 - `webhook` (опциональный, object) — конфигурация webhook для callback в async-режиме
   - `url` (обязательный, string) — URL для callback (http/https)
@@ -230,38 +224,65 @@ Content-Type: application/json
 `Authorization: Bearer <API_KEY>` (или совместимый `X-API-Key`).
 
 
-#### Пример ответа (sync):
+#### Пример ответа (sync) - Унифицированная структура метаданных:
 ```json
 {
   "task_id": "ab12cd34-...",
   "status": "completed",
-  "video_id": "pj8lIC7kP6I",
-  "title": "Название видео",
-  "filename": "video_20251114_212811.mp4",
-  "file_size": 15728640,
-  "download_endpoint": "/download/ab12cd34.../output/video_20251114_212811.mp4",
-  "storage_rel_path": "ab12cd34.../output/video_20251114_212811.mp4",
-  "task_download_url": "http://public.example.com/download/ab12cd34.../output/video_20251114_212811.mp4",
-  "task_download_url_internal": "http://service.local:5000/download/ab12cd34.../output/video_20251114_212811.mp4",
-  "metadata_url": "http://public.example.com/download/ab12cd34.../metadata.json",
-  "metadata_url_internal": "http://service.local:5000/download/ab12cd34.../metadata.json",
-  "duration": 180,
-  "resolution": "1280x720",
-  "ext": "mp4",
-  "client_meta": {"videoId": "pj8lIC7kP6I"},
-  "processed_at": "2025-11-14T21:28:11.123456"
+  "created_at": "2025-11-14T21:28:00.123456",
+  "completed_at": "2025-11-14T21:28:11.123456",
+  "expires_at": "2025-11-15T21:28:00.123456",
+  
+  "input": {
+    "video_url": "https://www.youtube.com/watch?v=pj8lIC7kP6I",
+    "operations": ["download_video"],
+    "operations_count": 1,
+    "video_id": "pj8lIC7kP6I",
+    "title": "Название видео",
+    "duration": 180,
+    "resolution": "1280x720",
+    "ext": "mp4"
+  },
+  
+  "output": {
+    "output_files": [
+      {
+        "filename": "video_20251114_212811.mp4",
+        "download_path": "/download/ab12cd34.../video_20251114_212811.mp4",
+        "download_url_internal": "http://service.local:5000/download/ab12cd34.../video_20251114_212811.mp4",
+        "download_url": "http://public.example.com/download/ab12cd34.../video_20251114_212811.mp4",
+        "expires_at": "2025-11-15T21:28:00.123456"
+      }
+    ],
+    "total_files": 1,
+    "metadata_url": "http://public.example.com/download/ab12cd34.../metadata.json",
+    "metadata_url_internal": "http://service.local:5000/download/ab12cd34.../metadata.json",
+    "ttl_seconds": 86400,
+    "ttl_human": "24h"
+  },
+  
+  "webhook": null,
+  "client_meta": {"videoId": "pj8lIC7kP6I"}
 }
 ```
 
-#### Пример ответа (async):
+> **Примечание об URL:** 
+> - `download_url_internal` и `metadata_url_internal` - всегда присутствуют (внутренние Docker network URL)
+> - `download_url` и `metadata_url` - присутствуют только когда **оба** параметра `PUBLIC_BASE_URL` **и** `API_KEY` настроены
+
+#### Пример ответа (async) - Минимальная структура для отслеживания:
 ```json
 {
   "task_id": "ab12cd34-...",
   "status": "processing",
   "check_status_url": "http://public.example.com/task_status/ab12cd34-...",
-  "check_status_url_internal": "http://service.local/task_status/ab12cd34-...",
   "metadata_url": "http://public.example.com/download/ab12cd34.../metadata.json",
+  "check_status_url_internal": "http://service.local/task_status/ab12cd34-...",
   "metadata_url_internal": "http://service.local/download/ab12cd34.../metadata.json",
+  "webhook": {
+    "url": "https://your-webhook.com/callback",
+    "headers": {"X-API-Key": "***"}
+  },
   "client_meta": {"videoId": "pj8lIC7kP6I"}
 }
 ```
@@ -276,12 +297,76 @@ Content-Type: application/json
 GET /task_status/<task_id>
 ```
 
-Ответ (варианты):
-- status=processing: `{ "task_id": "...", "status": "processing" }`
-- status=completed: включает поля `download_endpoint`, `storage_rel_path`, `task_download_url(_internal)`, `metadata_url(_internal)`, а также медиа-поля (`filename`, `duration`, `resolution`, `ext`, `title`, `video_id`, `created_at`, `completed_at`).
-- status=error: включает `error_type`, `error_message`, `user_action`, по возможности `raw_error`.
+**Ответ (processing):**
+```json
+{
+  "task_id": "...",
+  "status": "processing"
+}
+```
 
-Поле `client_meta` возвращается последним (сохраняется порядок ключей JSON).
+**Ответ (completed) - Полная унифицированная структура:**
+```json
+{
+  "task_id": "ab12cd34-...",
+  "status": "completed",
+  "created_at": "2025-11-14T21:28:00.123456",
+  "completed_at": "2025-11-14T21:28:11.123456",
+  "expires_at": "2025-11-15T21:28:00.123456",
+  
+  "input": {
+    "video_url": "https://www.youtube.com/watch?v=pj8lIC7kP6I",
+    "operations": ["download_video"],
+    "operations_count": 1,
+    "video_id": "pj8lIC7kP6I",
+    "title": "Название видео",
+    "duration": 180,
+    "resolution": "1280x720",
+    "ext": "mp4"
+  },
+  
+  "output": {
+    "output_files": [
+      {
+        "filename": "video_20251114_212811.mp4",
+        "download_path": "/download/ab12cd34.../video_20251114_212811.mp4",
+        "download_url_internal": "http://service.local:5000/download/ab12cd34.../video_20251114_212811.mp4",
+        "download_url": "http://public.example.com/download/ab12cd34.../video_20251114_212811.mp4",
+        "expires_at": "2025-11-15T21:28:00.123456"
+      }
+    ],
+    "total_files": 1,
+    "metadata_url": "http://public.example.com/download/ab12cd34.../metadata.json",
+    "metadata_url_internal": "http://service.local:5000/download/ab12cd34.../metadata.json",
+    "ttl_seconds": 86400,
+    "ttl_human": "24h"
+  },
+  
+  "webhook": {
+    "url": "https://your-webhook.com/callback",
+    "headers": {"X-API-Key": "***"},
+    "status": "delivered",
+    "attempts": 1,
+    "last_attempt": "2025-11-14T21:28:12.123456",
+    "last_status": 200,
+    "task_id": "ab12cd34-..."
+  },
+  "client_meta": {"videoId": "pj8lIC7kP6I"}
+}
+```
+
+**Ответ (error):**
+```json
+{
+  "task_id": "...",
+  "status": "error",
+  "operation": "download_video",
+  "error_type": "private_video|unavailable|deleted|...",
+  "error_message": "Описание ошибки",
+  "user_action": "Рекомендуемое действие",
+  "raw_error": "..."
+}
+```
 
 ### 4. Скачать результат или метаданные
 
@@ -290,49 +375,7 @@ GET /download/<task_id>/output/<file>
 GET /download/<task_id>/metadata.json
 ```
 
-### 5. Получить прямую ссылку на видео
-
-```bash
-POST /get_direct_url
-Content-Type: application/json
-
-{
-  "url": "https://www.youtube.com/watch?v=VIDEO_ID",
-  "quality": "best[height<=720]"
-}
-```
-
-Параметры:
-- `url` (обязательный) - URL видео YouTube
-- `quality` (опциональный) - качество видео (по умолчанию: `best[height<=720]`)
-  - `best[height<=720]` - лучшее до 720p
-  - `best[height<=480]` - лучшее до 480p
-  - `best[height<=1080]` - лучшее до 1080p
-  - `best` - максимальное качество
-
-Ответ:
-```json
-{
-  "video_id": "VIDEO_ID",
-  "title": "Название видео",
-  "direct_url": "https://...",
-  "duration": 180,
-  "filesize": 15728640,
-  "ext": "mp4",
-  "resolution": "1280x720",
-  "fps": 30,
-  "thumbnail": "https://...",
-  "uploader": "Channel Name",
-  "upload_date": "20240115",
-  "http_headers": {"User-Agent": "..."},
-  "expiry_warning": "URL expires in a few hours. Use immediately or call /download_video to save permanently.",
-  "processed_at": "2024-01-15T10:30:00.123456"
-}
-```
-
-**Важно:** Прямые ссылки имеют ограниченный срок действия и могут выдать 403 Forbidden при скачивании. Для гарантированного скачивания используйте `/download_video` (async или sync).
-
-### 6. n8n: рекомендуемая схема (через /download_video)
+### 5. n8n: рекомендуемая схема (через /download_video)
 
 **Шаг 0: Настройте n8n для работы с большими файлами**
 
@@ -501,17 +544,6 @@ Content-Type: application/json
 ### cURL
 
 ```bash
-# Получить прямую ссылку (без auth)
-curl -X POST http://localhost:5000/get_direct_url \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
-
-# То же с включенной auth (Bearer)
-curl -X POST http://localhost:5000/get_direct_url \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $API_KEY" \
-  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
-
 # Скачать видео
 curl -X POST http://localhost:5000/download_video \
   -H "Content-Type: application/json" \
@@ -530,15 +562,6 @@ curl -X POST http://localhost:5000/get_video_info \
 ```python
 import requests
 
-# Получить прямую ссылку
-response = requests.post('http://localhost:5000/get_direct_url', json={
-    'url': 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-    'quality': 'best[height<=720]'
-})
-
-data = response.json()
-print(f"Direct URL: {data['direct_url']}")
-
 # Скачать видео
 response = requests.post('http://localhost:5000/download_video', json={
     'url': 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
@@ -554,19 +577,19 @@ print(f"Download URL: {download_url}")
 ```javascript
 const axios = require('axios');
 
-// Получить прямую ссылку
-async function getDirectUrl(videoUrl) {
-  const response = await axios.post('http://localhost:5000/get_direct_url', {
+// Пример скачивания видео
+async function downloadVideo(videoUrl) {
+  const response = await axios.post('http://localhost:5000/download_video', {
     url: videoUrl,
     quality: 'best[height<=720]'
   });
 
-  return response.data.direct_url;
+  return response.data.download_url;
 }
 
 // Использование
-getDirectUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ')
-  .then(url => console.log('Direct URL:', url))
+downloadVideo('https://www.youtube.com/watch?v=dQw4w9WgXcQ')
+  .then(url => console.log('Download URL:', url))
   .catch(err => console.error('Error:', err));
 ```
 
@@ -833,7 +856,7 @@ docker run -d -p 5000:5000 \
 
 **Решения:**
 - Если `API_KEY` задан, все защищённые endpoints требуют `Authorization: Bearer <key>`
-- Защищённые endpoints: `/download_video`, `/get_direct_url`, `/get_video_info`
+- Защищённые endpoints: `/download_video`, `/get_video_info`
 - Публичные endpoints (без авторизации): `/health`, `/task_status`, `/download`
 - Если используется внутренний Docker режим, полностью уберите `API_KEY`
 
@@ -927,7 +950,7 @@ docker run -e N8N_DEFAULT_BINARY_DATA_MODE=filesystem ...
 
 **Причина**: YouTube блокирует прямые ссылки после истечения срока действия.
 
-**Решение**: Используйте endpoint `/download_video` вместо `/get_direct_url`. Первый скачивает видео на сервер (и возвращает ссылку на сохранённый файл), второй даёт только прямую ссылку, которая может быстро протухать.
+**Решение**: Используйте endpoint `/download_video` для скачивания видео на сервер. Он сохраняет файл и возвращает ссылку для скачивания.
 
 ## Безопасность
 
