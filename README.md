@@ -325,7 +325,6 @@ GET /download/<task_id>/metadata.json
 | `INTERNAL_BASE_URL` | — | Base for background URL generation (webhooks, Docker network). |
 | **Worker Configuration** |||
 | ~~`WORKERS`~~ | `2` | ❌ **Not configurable** in public version. Fixed at 2 workers. |
-| `GUNICORN_TIMEOUT` | `300` | Gunicorn timeout (seconds). |
 | **Redis Configuration** |||
 | **Logging** |||
 | `LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL). |

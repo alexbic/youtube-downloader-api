@@ -594,7 +594,6 @@ python app.py
 | `INTERNAL_BASE_URL` | — | Базовый URL для генерации фоновых URL (webhooks, Docker сеть). |
 | **Конфигурация воркеров** |||
 | ~~`WORKERS`~~ | `2` | ❌ **Не настраивается** в публичной версии. Фиксировано 2 воркера. |
-| `GUNICORN_TIMEOUT` | `300` | Таймаут Gunicorn (секунды). |
 | **Логирование** |||
 | `LOG_LEVEL` | `INFO` | Уровень логирования (DEBUG, INFO, WARNING, ERROR, CRITICAL). |
 
