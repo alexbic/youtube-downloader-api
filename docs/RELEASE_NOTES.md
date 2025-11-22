@@ -275,21 +275,49 @@ curl -X POST http://localhost:5000/download_video \
 - ✅ Имя заголовка: максимум 256 символов
 - ✅ Значение заголовка: максимум 2048 символов
 
-**Payload отправляемый на webhook:**
+**Payload отправляемый на webhook (унифицированная структура):**
 ```json
 {
-  "task_id": "abc-123-def",
+  "task_id": "abc-123-def-456",
   "status": "completed",
-  "video_id": "dQw4w9WgXcQ",
-  "title": "Video Title",
-  "filename": "video.mp4",
-  "filesize": 15728640,
-  "download_url": "https://your-domain.com/download/abc-123-def/video.mp4",
-  "metadata_url": "https://your-domain.com/download/abc-123-def/metadata.json",
-  "completed_at": "2025-11-21T15:30:00.123456",
-  "client_meta": {"project": "my-app"}
+  "created_at": "2025-11-21T15:30:00.123456",
+  "completed_at": "2025-11-21T15:30:45.654321",
+  "expires_at": "2025-11-22T15:30:00.123456",
+  
+  "input": {
+    "video_url": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+    "operations": ["download_video"],
+    "operations_count": 1,
+    "video_id": "dQw4w9WgXcQ",
+    "title": "Rick Astley - Never Gonna Give You Up",
+    "duration": 212,
+    "resolution": "1280x720",
+    "ext": "mp4"
+  },
+  
+  "output": {
+    "output_files": [
+      {
+        "filename": "video_20251121_153000.mp4",
+        "download_path": "/download/abc-123-def-456/video_20251121_153000.mp4",
+        "download_url_internal": "http://youtube-downloader:5000/download/abc-123-def-456/video_20251121_153000.mp4",
+        "download_url": "https://api.yourdomain.com/download/abc-123-def-456/video_20251121_153000.mp4",
+        "expires_at": "2025-11-22T15:30:00.123456"
+      }
+    ],
+    "total_files": 1,
+    "metadata_url": "https://api.yourdomain.com/download/abc-123-def-456/metadata.json",
+    "metadata_url_internal": "http://youtube-downloader:5000/download/abc-123-def-456/metadata.json",
+    "ttl_seconds": 86400,
+    "ttl_human": "24h"
+  },
+  
+  "webhook": null,
+  "client_meta": {"project": "my-app", "user_id": 123}
 }
 ```
+
+**Важно:** Webhook получает точно ту же структуру, что сохранена в metadata.json - никаких преобразований!
 
 **Retry механизм:**
 - 3 попытки доставки
@@ -330,40 +358,74 @@ curl -X POST http://localhost:5000/download_video \
 curl http://localhost:5000/task_status/abc-123-def
 ```
 
-**Ответ (processing):**
+**Ответ (processing) - минимальная структура:**
 ```json
 {
   "task_id": "abc-123-def",
   "status": "processing",
-  "video_url": "https://youtube.com/watch?v=dQw4w9WgXcQ",
   "created_at": "2025-11-21T15:29:00.123456"
 }
 ```
 
-**Ответ (completed):**
+**Ответ (completed) - полная унифицированная структура из Redis/metadata.json:**
 ```json
 {
-  "task_id": "abc-123-def",
+  "task_id": "abc-123-def-456",
   "status": "completed",
-  "video_id": "dQw4w9WgXcQ",
-  "title": "Video Title",
-  "filename": "video.mp4",
-  "filesize": 15728640,
-  "download_url": "/download/abc-123-def/video.mp4",
-  "task_download_url": "https://your-domain.com/download/abc-123-def/video.mp4",
-  "metadata_url": "https://your-domain.com/download/abc-123-def/metadata.json",
-  "completed_at": "2025-11-21T15:30:00.123456"
+  "created_at": "2025-11-21T15:30:00.123456",
+  "completed_at": "2025-11-21T15:30:45.654321",
+  "expires_at": "2025-11-22T15:30:00.123456",
+  
+  "input": {
+    "video_url": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+    "operations": ["download_video"],
+    "operations_count": 1,
+    "video_id": "dQw4w9WgXcQ",
+    "title": "Rick Astley - Never Gonna Give You Up",
+    "duration": 212,
+    "resolution": "1280x720",
+    "ext": "mp4"
+  },
+  
+  "output": {
+    "output_files": [
+      {
+        "filename": "video_20251121_153000.mp4",
+        "download_path": "/download/abc-123-def-456/video_20251121_153000.mp4",
+        "download_url_internal": "http://youtube-downloader:5000/download/abc-123-def-456/video_20251121_153000.mp4",
+        "download_url": "https://api.yourdomain.com/download/abc-123-def-456/video_20251121_153000.mp4",
+        "expires_at": "2025-11-22T15:30:00.123456"
+      }
+    ],
+    "total_files": 1,
+    "metadata_url": "https://api.yourdomain.com/download/abc-123-def-456/metadata.json",
+    "metadata_url_internal": "http://youtube-downloader:5000/download/abc-123-def-456/metadata.json",
+    "ttl_seconds": 86400,
+    "ttl_human": "24h"
+  },
+  
+  "webhook": null,
+  "client_meta": {"project": "my-app"}
 }
 ```
 
-**Ответ (error):**
+**Примечание:** При запросе `/task_status` для завершённых задач:
+- Первые 24 часа (в TTL): ответ из Redis за < 1ms
+- После TTL: ответ из metadata.json на диске за ~5ms
+- Обе структуры идентичны (синхронизированы)
+
+**Ответ (error) - структура ошибки:**
 ```json
 {
   "task_id": "abc-123-def",
   "status": "error",
-  "error_message": "Video not available",
-  "created_at": "2025-11-21T15:29:00.123456",
-  "completed_at": "2025-11-21T15:29:15.123456"
+  "operation": "download_video_async",
+  "error_type": "unavailable",
+  "error_message": "Video is unavailable",
+  "user_action": "Mark as unavailable - deleted or removed",
+  "raw_error": "ERROR: [youtube] video_id: Video unavailable",
+  "failed_at": "2025-11-21T15:29:15.123456",
+  "client_meta": {"project": "my-app"}
 }
 ```
 
