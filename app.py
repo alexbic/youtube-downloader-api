@@ -869,16 +869,16 @@ def _try_send_webhook_once(url: str, payload: dict, task_id: str, webhook_header
                 pass
         resp = requests.post(url, headers=headers, json=payload, timeout=WEBHOOK_TIMEOUT_SECONDS)
         if 200 <= resp.status_code < 300:
-            logger.info(f"[{task_id[:8]}] Webhook re-delivered successfully (HTTP {resp.status_code})")
+            logger.info(f"[{task_id[:8]}] 🚦 Webhook re-delivered successfully (HTTP {resp.status_code})")
             return True
         preview = (resp.text or "")[:500]
         if preview:
-            logger.warning(f"[{task_id[:8]}] Webhook re-delivery failed HTTP {resp.status_code}; body: {preview}")
+            logger.warning(f"[{task_id[:8]}] 🚦 Webhook re-delivery failed (HTTP {resp.status_code}); body: {preview}")
         else:
-            logger.warning(f"[{task_id[:8]}] Webhook re-delivery failed HTTP {resp.status_code} (empty body)")
+            logger.warning(f"[{task_id[:8]}] 🚦 Webhook re-delivery failed (HTTP {resp.status_code}) (empty body)")
         return False
     except Exception as e:
-        logger.warning(f"[{task_id[:8]}] Webhook re-delivery exception: {e}")
+        logger.warning(f"[{task_id[:8]}] 🚦 Webhook re-delivery exception: {e}")
         return False
 
 def _webhook_resender_loop():
@@ -1256,7 +1256,7 @@ def download_video():
         if bool(data.get('async', False)):
             cleanup_old_files()
             task_id = str(uuid.uuid4())
-            logger.info(f"Task created (async): {task_id} | {video_url}")
+            logger.info(f"✨ Task created (async): [{task_id}] | URL: {video_url}")
             logger.debug(f"[{task_id[:8]}] quality={quality}, webhook={'yes' if webhook_url else 'no'}")
             create_task_dirs(task_id)
             created_at_iso = datetime.now().isoformat()
@@ -1338,7 +1338,7 @@ def download_video():
 
         # Sync mode: download immediately and return result
         task_id = str(uuid.uuid4())
-        logger.info(f"Task created (sync): {task_id} | {video_url}")
+        logger.info(f"✨ Task created (sync): [{task_id}] | URL: {video_url}")
         logger.debug(f"[{task_id[:8]}] quality={quality}")
         created_at_iso = datetime.now().isoformat()
         create_task_dirs(task_id)
@@ -1566,7 +1566,7 @@ def _background_download(
         if not webhook_url:
             logger.debug(f"[{task_id[:8]}] Webhook skipped: no webhook_url provided")
             return
-        logger.info(f"[{task_id[:8]}] Sending webhook")
+        logger.info(f"[{task_id[:8]}] 🚦 Sending webhook to {webhook_url}")
         logger.debug(f"[{task_id[:8]}] webhook_url={webhook_url}")
         headers = {"Content-Type": "application/json"}
         # Добавляем глобальные пользовательские заголовки из конфига
@@ -1610,8 +1610,7 @@ def _background_download(
                 # Используем json= для корректного формирования тела и заголовков
                 resp = requests.post(webhook_url, headers=headers, json=payload, timeout=WEBHOOK_TIMEOUT_SECONDS)
                 if 200 <= resp.status_code < 300:
-                    logger.info(f"[{task_id[:8]}] Webhook delivered")
-                    logger.debug(f"[{task_id[:8]}] HTTP {resp.status_code}")
+                    logger.info(f"[{task_id[:8]}] 🚦 Webhook delivered successfully (HTTP {resp.status_code}) → {webhook_url}")
                     st.update({
                         "status": "delivered",
                         "attempts": int(st.get("attempts") or 0) + 1,
@@ -1625,12 +1624,12 @@ def _background_download(
                 # Логируем тело ответа (усечённое) для упрощения диагностики в n8n
                 resp_preview = (resp.text or "")[:500]
                 if resp_preview:
-                    logger.warning(f"[{task_id[:8]}] Webhook failed with HTTP {resp.status_code}; body: {resp_preview}")
+                    logger.warning(f"[{task_id[:8]}] 🚦 Webhook failed (HTTP {resp.status_code}) → {webhook_url}; body: {resp_preview}")
                 else:
-                    logger.warning(f"[{task_id[:8]}] Webhook failed with HTTP {resp.status_code} (empty body)")
+                    logger.warning(f"[{task_id[:8]}] 🚦 Webhook failed (HTTP {resp.status_code}) → {webhook_url} (empty body)")
                 # Неположительные коды считаем ошибкой доставки
             except Exception as e:
-                logger.warning(f"[{task_id[:8]}] Webhook attempt {i} failed: {e}")
+                logger.warning(f"[{task_id[:8]}] 🚦 Webhook attempt {i} failed: {e} → {webhook_url}")
                 # сетевые/таймаут ошибки — пробуем снова
                 pass
             # Обновляем счётчик попыток и планируем следующий фоновый ретрай
@@ -1646,10 +1645,10 @@ def _background_download(
             if i < attempts:
                 time.sleep(max(0.0, WEBHOOK_RETRY_INTERVAL_SECONDS))
         # Все попытки исчерпаны — продолжаем без падения
-        logger.error(f"[{task_id[:8]}] Webhook delivery failed after {attempts} attempts; will retry in background")
+        logger.error(f"[{task_id[:8]}] 🚦 Webhook delivery failed after {attempts} attempts; will retry in background")
 
     try:
-        logger.info(f"[{task_id[:8]}] Download started")
+        logger.info(f"[{task_id[:8]}] 📥 Download started: {video_url}")
         logger.debug(f"[{task_id[:8]}] url={video_url}, quality={quality}")
         update_task(task_id, {"status": "downloading"})
         
@@ -1706,7 +1705,7 @@ def _background_download(
         if os.path.exists(file_path):
             os.chmod(file_path, 0o644)
             file_size = os.path.getsize(file_path)
-            logger.info(f"[{task_id[:8]}] Download completed: {info.get('title', 'unknown')[:50]} [{file_size//1024//1024}MB]")
+            logger.info(f"[{task_id[:8]}] 🎬 Download completed: \"{info.get('title', 'unknown')[:50]}\" → {filename} ({file_size//1024//1024} MB)")
             logger.debug(f"[{task_id[:8]}] video_id={info.get('id')}, ext={ext}, resolution={info.get('resolution')}")
             download_endpoint = build_download_endpoint(task_id, filename)
             full_task_download_url = build_absolute_url(download_endpoint, base_url_external or None)
@@ -1794,7 +1793,7 @@ def _background_download(
                     "status": "completed",
                     "metadata": meta_item  # Полная структура для моментального ответа
                 })
-                logger.debug(f"[{task_id[:8]}] ✓ Redis synchronized with metadata.json")
+                logger.info(f"[{task_id[:8]}] 💾 Redis synchronized: metadata.json → completed")
             except Exception as e:
                 logger.warning(f"[{task_id[:8]}] Failed to sync Redis (non-critical): {e}")
                 # Не критично - metadata.json уже сохранён
@@ -1843,7 +1842,7 @@ def _background_download(
                     "status": "error",
                     "metadata": metadata  # Полная структура ошибки
                 })
-                logger.debug(f"[{task_id[:8]}] ✓ Redis synchronized with error metadata")
+                logger.info(f"[{task_id[:8]}] 💾 Redis synchronized: metadata.json → error")
             except Exception as e:
                 logger.warning(f"[{task_id[:8]}] Failed to sync Redis (non-critical): {e}")
             
@@ -1887,7 +1886,7 @@ def _background_download(
                 "status": "error",
                 "metadata": metadata  # Полная структура ошибки для быстрого доступа
             })
-            logger.debug(f"[{task_id[:8]}] ✓ Redis synchronized with error metadata")
+            logger.info(f"[{task_id[:8]}] 💾 Redis synchronized: metadata.json → error")
         except Exception as sync_err:
             logger.warning(f"[{task_id[:8]}] Failed to sync Redis (non-critical): {sync_err}")
         
