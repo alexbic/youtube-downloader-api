@@ -1732,7 +1732,7 @@ def download_video():
                 os.chmod(file_path, 0o644)
                 file_size = os.path.getsize(file_path)
                 file_size_mb = file_size / 1024 / 1024
-                logger.info(f"[{task_id[:8]}] Completed (sync): {info.get('title', 'unknown')[:50]} | File: {filename} | Size: {file_size_mb:.2f}MB")
+                logger.info(f"[{task_id[:8]}] 🎬 Download completed (sync): {info.get('title', 'unknown')[:50]} | File: {filename} | Size: {file_size_mb:.2f}MB")
                 logger.debug(f"[{task_id[:8]}] video_id={info.get('id')}, ext={ext}, resolution={info.get('resolution')}")
                 download_endpoint = build_download_endpoint(task_id, filename)
                 task_download_url = build_absolute_url(download_endpoint)
@@ -2101,7 +2101,7 @@ def _background_download(
             os.chmod(file_path, 0o644)
             file_size = os.path.getsize(file_path)
             file_size_mb = file_size / 1024 / 1024
-            logger.info(f"[{task_id[:8]}] Completed (async): {info.get('title', 'unknown')[:50]} | File: {filename} | Size: {file_size_mb:.2f}MB")
+            logger.info(f"[{task_id[:8]}] 🎬 Download completed (async): {info.get('title', 'unknown')[:50]} | File: {filename} | Size: {file_size_mb:.2f}MB")
             logger.debug(f"[{task_id[:8]}] video_id={info.get('id')}, ext={ext}, resolution={info.get('resolution')}")
             download_endpoint = build_download_endpoint(task_id, filename)
             full_task_download_url = build_absolute_url(download_endpoint, base_url_external or None)
