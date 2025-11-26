@@ -12,6 +12,45 @@ import threading
 from functools import wraps
 from typing import Dict, Any
 import time
+from api_commons import (
+    # Error codes - Authentication
+    ERROR_MISSING_AUTH_TOKEN,
+    ERROR_INVALID_API_KEY,
+    # Error codes - Validation
+    ERROR_MISSING_REQUIRED_FIELD,
+    ERROR_INVALID_URL,
+    ERROR_INVALID_WEBHOOK_URL,
+    ERROR_INVALID_WEBHOOK_HEADERS,
+    ERROR_INVALID_CLIENT_META,
+    # Error codes - Tasks
+    ERROR_TASK_NOT_FOUND,
+    ERROR_FILE_NOT_FOUND,
+    ERROR_INVALID_PATH,
+    # Error codes - Download
+    ERROR_VIDEO_UNAVAILABLE,
+    ERROR_VIDEO_REQUIRES_AUTH,
+    ERROR_AGE_RESTRICTED,
+    ERROR_COUNTRY_BLOCKED,
+    ERROR_NETWORK_ERROR,
+    ERROR_EXTRACTION_FAILED,
+    ERROR_DOWNLOAD_FAILED,
+    ERROR_UNKNOWN,
+    ERROR_INTERNAL_SERVER,
+    ERROR_NO_FILE_DOWNLOADED,
+    # Error response functions
+    create_simple_error,
+    create_task_error,
+    create_internal_error,
+    # Utility functions
+    map_youtube_error_type_to_code,
+    is_youtube_url
+)
+from bootstrap import (
+    wait_for_redis,
+    log_tcp_port,
+    ensure_redis_connection,
+    log_startup_banner
+)
 
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
 try:
@@ -97,6 +136,8 @@ PUBLIC_BASE_URL = os.getenv('PUBLIC_BASE_URL') or os.getenv('EXTERNAL_BASE_URL')
 INTERNAL_BASE_URL = os.getenv('INTERNAL_BASE_URL')
 # Авторизация требуется только если указан внешний URL и задан ключ
 AUTH_REQUIRED = bool(PUBLIC_BASE_URL) and bool(API_KEY)
+
+# Error constants imported from api_commons module
 
 def log_startup_info():
     public_url = PUBLIC_BASE_URL
@@ -190,9 +231,15 @@ def require_api_key(f):
         if not token:
             token = request.headers.get('X-API-Key')
         if not token:
-            return jsonify({"error": "Missing Authorization Bearer token or X-API-Key"}), 401
+            return jsonify(create_simple_error(
+                "Missing Authorization Bearer token or X-API-Key",
+                ERROR_MISSING_AUTH_TOKEN
+            )), 401
         if token != API_KEY:
-            return jsonify({"error": "Invalid API key"}), 403
+            return jsonify(create_simple_error(
+                "Invalid API key",
+                ERROR_INVALID_API_KEY
+            )), 403
         return f(*args, **kwargs)
     return decorated
 
@@ -201,7 +248,11 @@ def require_api_key(f):
 # ============================================
 def is_youtube_url(url: str) -> bool:
     """
-    Validates that the URL is a YouTube URL.
+    Validates that the URL is a YouTube URL (enhanced version).
+
+    NOTE: api_commons has a simpler version. This enhanced version
+    provides more strict validation for production use.
+
     Accepts:
     - youtube.com (www.youtube.com, m.youtube.com, music.youtube.com)
     - youtu.be short URLs
@@ -781,6 +832,8 @@ def validate_client_meta(client_meta):
     if len(meta_bytes) > MAX_CLIENT_META_BYTES:
         return False, f"client_meta exceeds {MAX_CLIENT_META_BYTES} bytes"
     return True, None
+
+# Error response helpers imported from api_commons module
 
 def classify_youtube_error(error_message: str) -> dict:
     """Классифицирует ошибку YouTube для автоматической обработки с поддержкой auto-recovery"""
@@ -1497,7 +1550,10 @@ def download_video():
         if webhook is not None:
             # Принимаем только объект формата: {"url": "...", "headers": {...}}
             if not isinstance(webhook, dict):
-                return jsonify({"error": "Invalid webhook (must be an object with 'url' and optional 'headers')"}), 400
+                return jsonify(create_simple_error(
+                    "Invalid webhook (must be an object with 'url' and optional 'headers')",
+                    ERROR_INVALID_WEBHOOK_URL
+                )), 400
 
             webhook_url = webhook.get('url')
             webhook_headers = webhook.get('headers')
@@ -1505,19 +1561,34 @@ def download_video():
             # Валидация webhook.url
             if webhook_url is not None:
                 if not isinstance(webhook_url, str) or not webhook_url.lower().startswith(("http://", "https://")):
-                    return jsonify({"error": "Invalid webhook.url (must start with http(s)://)"}), 400
+                    return jsonify(create_simple_error(
+                        "Invalid webhook.url (must start with http(s)://)",
+                        ERROR_INVALID_WEBHOOK_URL
+                    )), 400
                 if len(webhook_url) > 2048:
-                    return jsonify({"error": "Invalid webhook.url (too long)"}), 400
+                    return jsonify(create_simple_error(
+                        "Invalid webhook.url (too long)",
+                        ERROR_INVALID_WEBHOOK_URL
+                    )), 400
 
             # Валидация webhook.headers
             if webhook_headers is not None:
                 if not isinstance(webhook_headers, dict):
-                    return jsonify({"error": "Invalid webhook.headers (must be an object)"}), 400
+                    return jsonify(create_simple_error(
+                        "Invalid webhook.headers (must be an object)",
+                        ERROR_INVALID_WEBHOOK_HEADERS
+                    )), 400
                 for key, value in webhook_headers.items():
                     if not isinstance(key, str) or not isinstance(value, str):
-                        return jsonify({"error": "Invalid webhook.headers (keys and values must be strings)"}), 400
+                        return jsonify(create_simple_error(
+                            "Invalid webhook.headers (keys and values must be strings)",
+                            ERROR_INVALID_WEBHOOK_HEADERS
+                        )), 400
                     if len(key) > 256 or len(value) > 2048:
-                        return jsonify({"error": "Invalid webhook.headers (header name or value too long)"}), 400
+                        return jsonify(create_simple_error(
+                            "Invalid webhook.headers (header name or value too long)",
+                            ERROR_INVALID_WEBHOOK_HEADERS
+                        )), 400
 
         # Fallback на DEFAULT_WEBHOOK_URL если webhook не указан
         if webhook_url is None and DEFAULT_WEBHOOK_URL:
@@ -1526,20 +1597,35 @@ def download_video():
         if isinstance(client_meta, str):
             try:
                 if len(client_meta.encode('utf-8')) > MAX_CLIENT_META_BYTES:
-                    return jsonify({"error": f"Invalid client_meta: exceeds {MAX_CLIENT_META_BYTES} bytes"}), 400
+                    return jsonify(create_simple_error(
+                        f"Invalid client_meta: exceeds {MAX_CLIENT_META_BYTES} bytes",
+                        ERROR_INVALID_CLIENT_META
+                    )), 400
                 parsed = json.loads(client_meta)
                 client_meta = parsed if isinstance(parsed, dict) else None
             except json.JSONDecodeError as e:
-                return jsonify({"error": f"Invalid client_meta JSON: {e}"}), 400
+                return jsonify(create_simple_error(
+                    f"Invalid client_meta JSON: {e}",
+                    ERROR_INVALID_CLIENT_META
+                )), 400
         ok, err = validate_client_meta(client_meta)
         if not ok:
-            return jsonify({"error": f"Invalid client_meta: {err}"}), 400
+            return jsonify(create_simple_error(
+                f"Invalid client_meta: {err}",
+                ERROR_INVALID_CLIENT_META
+            )), 400
         if not video_url:
-            return jsonify({"error": "URL is required"}), 400
+            return jsonify(create_simple_error(
+                "URL is required",
+                ERROR_MISSING_REQUIRED_FIELD
+            )), 400
 
         # Security: Validate that URL is from YouTube only
         if not is_youtube_url(video_url):
-            return jsonify({"error": "Invalid URL: Only YouTube URLs are allowed (youtube.com, youtu.be)"}), 400
+            return jsonify(create_simple_error(
+                "Invalid URL: Only YouTube URLs are allowed (youtube.com, youtu.be)",
+                ERROR_INVALID_URL
+            )), 400
 
         # Async mode: start background task and return immediately
         if bool(data.get('async', False)):
@@ -1691,10 +1777,15 @@ def download_video():
                 save_task_metadata(task_id, [meta_item])
                 # Возвращаем унифицированную структуру (как в metadata.json)
                 return jsonify(meta_item)
-            return jsonify({"error": "No file downloaded"}), 500
+            return jsonify(create_simple_error(
+                "No file downloaded",
+                ERROR_NO_FILE_DOWNLOADED
+            )), 500
         except Exception as e:
             error_info = classify_youtube_error(str(e))
             logger.error(f"[{task_id[:8]}] SYNC FAILED: type={error_info['error_type']}, msg={error_info['error_message']}")
+
+            # Save old format metadata for compatibility
             metadata = {
                 "task_id": task_id,
                 "status": "error",
@@ -1711,17 +1802,23 @@ def download_video():
             if webhook_url:
                 metadata['webhook_url'] = webhook_url
             save_task_metadata(task_id, metadata)
-            return jsonify({
-                "task_id": task_id,
-                "status": "error",
-                "error_type": error_info["error_type"],
-                "error_message": error_info["error_message"],
-                "user_action": error_info["user_action"],
-                "metadata_url": f"/download/{task_id}/metadata.json",
-                "client_meta": client_meta
-            }), 400
+
+            # Return unified error structure
+            error_code = map_youtube_error_type_to_code(error_info["error_type"])
+            error_response = create_task_error(
+                task_id=task_id,
+                error_message=error_info["error_message"],
+                error_code=error_code,
+                operation="download_video",
+                metadata_url=f"/download/{task_id}/metadata.json",
+                client_meta=client_meta,
+                raw_error=str(e),
+                user_action=error_info.get("user_action"),
+                error_type=error_info.get("error_type")
+            )
+            return jsonify(error_response), 400
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify(create_internal_error(str(e))), 500
 
 # ============================================
 # TASK FILE DOWNLOAD
@@ -1731,12 +1828,18 @@ def download_task_file(inner_path):
     try:
         full_path = os.path.join(TASKS_DIR, inner_path)
         if not os.path.abspath(full_path).startswith(os.path.abspath(TASKS_DIR)):
-            return jsonify({"error": "Invalid path"}), 403
+            return jsonify(create_simple_error(
+                "Invalid path",
+                ERROR_INVALID_PATH
+            )), 403
         if os.path.exists(full_path) and os.path.isfile(full_path):
             return send_file(full_path, as_attachment=True, conditional=True)
-        return jsonify({"error": "File not found"}), 404
+        return jsonify(create_simple_error(
+            "File not found",
+            ERROR_FILE_NOT_FOUND
+        )), 404
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify(create_internal_error(str(e))), 500
 
 # download_direct endpoint removed as legacy
 
@@ -1838,7 +1941,10 @@ def task_status(task_id):
     
     # Задача не найдена
     logger.warning(f"[{task_id[:8]}] /task_status: task not found (no Redis, no metadata.json, no directory)")
-    return jsonify({"error": "Task not found"}), 404
+    return jsonify(create_simple_error(
+        "Task not found",
+        ERROR_TASK_NOT_FOUND
+    )), 404
 
 def _background_download(
     task_id: str,
