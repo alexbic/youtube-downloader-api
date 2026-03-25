@@ -708,18 +708,6 @@ services:
 - Cleanup запускается при каждом новом запросе
 - Удаляются как файлы, так и записи в Redis
 
-### Cookies Support
-
-Для обхода ограничений YouTube можно использовать cookies из браузера:
-
-```json
-{
-  "url": "https://youtube.com/watch?v=VIDEO_ID"
-}
-```
-
-Поддерживаемые браузеры: `chrome`, `firefox`, `edge`, `safari`, `opera`
-
 ---
 
 ## 📦 Client Meta

@@ -30,10 +30,6 @@ services:
       # Downloaded files and task metadata (auto-deleted after 24 h)
       - ./tasks:/app/tasks
 
-      # OPTIONAL: YouTube cookies to bypass geo/age restrictions
-      # Export from browser with a cookies.txt extension, then uncomment:
-      # - ./cookies.txt:/app/cookies.txt:ro
-
     environment:
       # Public base URL for generating absolute download links.
       # Examples: https://ytdl.example.com  or  http://192.168.1.10:5002

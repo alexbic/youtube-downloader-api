@@ -1,15 +1,10 @@
 # YouTube Downloader API
 
-**Open Source** REST API for downloading YouTube videos and getting direct video links using yt-dlp.
+REST API for downloading YouTube videos using yt-dlp, packaged as a standalone Docker container.
 
 [![Docker Hub](https://img.shields.io/docker/v/alexbic/youtube-downloader-api?label=Docker%20Hub&logo=docker)](https://hub.docker.com/r/alexbic/youtube-downloader-api)
-[![GitHub Container Registry](https://img.shields.io/badge/ghcr.io-image-blue?logo=github)](https://github.com/alexbic/youtube-downloader-api/pkgs/container/youtube-downloader-api)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-1.1.0-blue)](docs/RELEASE_NOTES_v1.1.0.md)
-[![Changelog](https://img.shields.io/badge/changelog-1.1.0-blue)](docs/CHANGELOG.md)
-
-> ⚠️ **PUBLIC VERSION**: This is the free, limited version with hardcoded limits (2 workers, 24h TTL, 256MB Redis).
-> 🚀 **Want more?** Check out [YouTube Downloader API Pro](https://github.com/alexbic/youtube-downloader-api-pro) - PostgreSQL storage, configurable TTL, processing results cache, and more!
+[![Version](https://img.shields.io/badge/version-2.0.0-blue)](docs/CHANGELOG.md)
 
 **English** | [Русский](README.ru.md)
 
@@ -17,57 +12,49 @@
 
 ## Features
 
-- 🎬 **Direct URL retrieval** - get direct video links without downloading
-- ⬇️ **Server-side downloads** - download videos to server with quality selection (sync/async)
-- 📊 **Video information** - get complete metadata
-- 🔄 **Sync and async modes** - choose between immediate or background processing
-- 🔗 **Webhook support** - POST notifications on task completion with automatic retries
-- 🔁 **Webhook resender** - background service retries failed webhooks every 15 minutes
-- 🔧 **Automatic task recovery** - resume interrupted tasks on restart, retry failed tasks with backoff
-- 🔑 **Optional authentication** - Bearer token support for public deployments
-- 🌐 **Absolute URLs** - internal and external URL support
-- 📦 **Redis support** - multi-worker task storage (built-in embedded Redis)
-- 🔒 **Cookie support** - bypass YouTube restrictions
-- 🧹 **Auto cleanup** - automatic file deletion after 24 hours (fixed in public version)
-- 🐳 **Docker ready** - multi-arch support (amd64, arm64)
-- 📝 **Client metadata** - pass arbitrary JSON through the entire workflow
+- ⬇️ **Async downloads** — submit a task, poll status, download the file
+- 🔗 **Webhook notifications** — POST callback on completion with automatic retries
+- 🔄 **Task recovery** — interrupted tasks are re-enqueued on container restart
+- 🛡️ **bgutil PO Token** — bypasses YouTube SABR restrictions (required since 2024)
+- 🔑 **Optional Bearer auth** — protect endpoints with an API key
+- 🧹 **Auto cleanup** — files deleted after 24 hours
+- 🐳 **Standalone container** — Redis, bgutil, orchestrator, gunicorn all in one image
 
 ---
 
 ## Quick Start
 
-### From Docker Hub (Public Version)
-
-**Public version features:**
-- ✅ Standalone container with built-in Redis
-- ✅ Fixed limits: 2 workers, 24h TTL, 256MB Redis
-- ✅ No external dependencies
-- ⚠️ Not configurable (for flexible setup, use Pro version)
-
 ```bash
 docker pull alexbic/youtube-downloader-api:latest
-docker run -d -p 5000:5000 --name yt-downloader alexbic/youtube-downloader-api:latest
+docker run -d -p 5000:5000 \
+  -e SERVER_BASE_URL=http://localhost:5000 \
+  --name ytdl alexbic/youtube-downloader-api:latest
 ```
 
-### Test the API
-
+**Health check:**
 ```bash
-# Health check
 curl http://localhost:5000/health
+```
 
-# Download video (sync)
+**Download a video:**
+```bash
+# Submit task
 curl -X POST http://localhost:5000/download_video \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
+
+# {"task_id": "abc123...", "status": "queued", ...}
+
+# Poll status
+curl http://localhost:5000/task_status/abc123...
+
+# Download file when completed
+curl -O -J "http://localhost:5000/download/abc123.../filename.webm"
 ```
 
 ---
 
-## Installation
-
-### Docker Compose (Custom Setup)
-
-> ⚠️ **Note**: The public version has embedded Redis. This example is for custom deployments only.
+## Docker Compose
 
 ```yaml
 version: '3.8'
@@ -78,832 +65,259 @@ services:
       - "5000:5000"
     volumes:
       - ./tasks:/app/tasks
-      # - ./cookies.txt:/app/cookies.txt  # optional
     environment:
-      # Public base URL for external links (https://yourdomain.com/api)
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
-      # API Key for authentication (Bearer token)
-      API_KEY: ${API_KEY}
+      SERVER_BASE_URL: ${SERVER_BASE_URL:-http://localhost:5000}
+      API_KEY: ${API_KEY:-}
     restart: unless-stopped
-```
-
-### Local Development
-
-```bash
-git clone https://github.com/alexbic/youtube-downloader-api.git
-cd youtube-downloader-api
-pip install -r requirements.txt
-python app.py
 ```
 
 ---
 
-## API Endpoints
+## API Reference
 
-### 1. Health Check
+### GET /health
 
-```bash
-GET /health
-```
-
-**Response:**
 ```json
 {
-  "status": "healthy",
-  "timestamp": "2024-01-15T10:30:00.123456",
-  "auth": "enabled|disabled",
-  "storage": "redis|memory"
+  "status": "ok",
+  "redis": "ok",
+  "active_tasks": 0,
+  "queued_tasks": 0,
+  "max_concurrent_tasks": 2,
+  "worker_id": "worker-12",
+  "timestamp": "2026-01-01T12:00:00Z"
 }
 ```
 
-### 2. Download Video (Sync/Async)
+---
 
-```bash
-POST /download_video
-Content-Type: application/json
-```
+### POST /download_video
 
-**Request (async):**
+**Request:**
 ```json
 {
   "url": "https://www.youtube.com/watch?v=VIDEO_ID",
-  "async": true,
-  "quality": "best[height<=720]",
-  "webhook": {
-    "url": "https://your-webhook.com/callback",
-    "headers": {
-      "X-API-Key": "your-secret-key"
-    }
-  },
-  "client_meta": {"user_id": 123, "project": "demo"}
-}
-```
-
-**Request (sync):**
-```json
-{
-  "url": "https://www.youtube.com/watch?v=VIDEO_ID",
-  "quality": "best[height<=720]",
+  "format": "bestvideo+bestaudio/best",
+  "max_size_mb": 2048,
+  "webhook_url": "https://your-server.com/webhook",
+  "webhook_headers": {"Authorization": "Bearer secret"},
   "client_meta": {"user_id": 123}
 }
 ```
 
-**Parameters:**
-- `url` (required, string) - YouTube video URL
-- `async` (optional, boolean) - async mode (default: false)
-- `quality` (optional, string) - video quality (default: `best[height<=720]`)
-  - `best[height<=480]` - 480p
-  - `best[height<=720]` - 720p
-  - `best[height<=1080]` - 1080p
-  - `best` - maximum quality
-- `webhook` (optional, object) - webhook configuration (async mode only)
-  - `url` (required, string) - webhook callback URL
-  - `headers` (optional, object) - custom headers for webhook authentication
-- `client_meta` (optional, object) - arbitrary JSON metadata (max 16KB)
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `url` | string | ✅ | YouTube URL |
+| `format` | string | — | yt-dlp format string (default: best within size limit) |
+| `max_size_mb` | int | — | Max file size in MB (default: 2048) |
+| `webhook_url` | string | — | POST callback URL on completion |
+| `webhook_headers` | object | — | Custom headers for webhook request |
+| `client_meta` | object | — | Arbitrary JSON passed through to webhook/status |
 
-**Response (sync) - Unified metadata structure:**
+**Response `202`:**
 ```json
 {
-  "task_id": "abc123...",
-  "status": "completed",
-  "created_at": "2025-01-16T12:00:00.123456",
-  "completed_at": "2025-01-16T12:00:10.123456",
-  "expires_at": "2025-01-17T12:00:00.123456",
-  
-  "input": {
-    "video_url": "https://www.youtube.com/watch?v=VIDEO_ID",
-    "operations": ["download_video"],
-    "operations_count": 1,
-    "video_id": "VIDEO_ID",
-    "title": "Video Title",
-    "duration": 180,
-    "resolution": "1280x720",
-    "ext": "mp4"
-  },
-  
-  "output": {
-    "output_files": [
-      {
-        "filename": "video_20250116_120000.mp4",
-        "download_path": "/download/abc123.../video_20250116_120000.mp4",
-        "download_url_internal": "http://service.local:5000/download/abc123.../video_20250116_120000.mp4",
-        "download_url": "http://public.example.com/download/abc123.../video_20250116_120000.mp4",
-        "expires_at": "2025-01-17T12:00:00.123456"
-      }
-    ],
-    "total_files": 1,
-    "metadata_url": "http://public.example.com/download/abc123.../metadata.json",
-    "metadata_url_internal": "http://service.local:5000/download/abc123.../metadata.json",
-    "ttl_seconds": 86400,
-    "ttl_human": "24h"
-  },
-  
-  "webhook": null,
-  "client_meta": {"user_id": 123}
+  "task_id": "b0b8d187-...",
+  "status": "queued",
+  "created_at": "2026-01-01T12:00:00",
+  "platform": "YouTube"
 }
 ```
 
-> **Note on URLs:** 
-> - `download_url_internal` and `metadata_url_internal` - always present (Docker network URLs)
-> - `download_url` and `metadata_url` - only present when **both** `PUBLIC_BASE_URL` **and** `API_KEY` are configured
+---
 
-**Response (async) - Minimal tracking structure:**
-```json
-{
-  "task_id": "abc123...",
-  "status": "processing",
-  "check_status_url": "http://public.example.com/task_status/abc123...",
-  "metadata_url": "http://public.example.com/download/abc123.../metadata.json",
-  "check_status_url_internal": "http://service.local/task_status/abc123...",
-  "metadata_url_internal": "http://service.local/download/abc123.../metadata.json",
-  "webhook": {
-    "url": "https://your-webhook.com/callback",
-    "headers": {"X-API-Key": "***"}
-  },
-  "client_meta": {"user_id": 123}
-}
-```
-
-**Important:** In async mode, errors (private video, deleted, blocked, etc.) are returned only via `/task_status/<task_id>`. The initial POST response always contains only task_id and status.
-
-### 3. Get Task Status
-
-```bash
-GET /task_status/<task_id>
-```
+### GET /task_status/\<task_id\>
 
 **Response (processing):**
 ```json
 {
-  "task_id": "abc123...",
-  "status": "processing"
+  "task_id": "b0b8d187-...",
+  "status": "processing",
+  "started_at": "2026-01-01T12:00:01",
+  "platform": "YouTube",
+  "url": "https://www.youtube.com/watch?v=..."
 }
 ```
 
-**Response (completed) - Same unified structure as sync mode:**
+**Response (completed):**
 ```json
 {
-  "task_id": "abc123...",
+  "task_id": "b0b8d187-...",
   "status": "completed",
-  "created_at": "2025-01-16T12:00:00.123456",
-  "completed_at": "2025-01-16T12:00:10.123456",
-  "expires_at": "2025-01-17T12:00:00.123456",
-  
-  "input": {
-    "video_url": "https://www.youtube.com/watch?v=VIDEO_ID",
-    "operations": ["download_video"],
-    "operations_count": 1,
-    "video_id": "VIDEO_ID",
+  "created_at": "2026-01-01T12:00:00",
+  "completed_at": "2026-01-01T12:00:09",
+  "platform": "YouTube",
+  "url": "https://www.youtube.com/watch?v=...",
+  "result": {
+    "filename": "Video Title.webm",
+    "download_url": "http://localhost:5000/download/b0b8d187-.../Video Title.webm",
+    "file_size_bytes": 47448900,
     "title": "Video Title",
-    "duration": 180,
-    "resolution": "1280x720",
-    "ext": "mp4"
-  },
-  
-  "output": {
-    "output_files": [
-      {
-        "filename": "video_20250116_120000.mp4",
-        "download_path": "/download/abc123.../video_20250116_120000.mp4",
-        "download_url_internal": "http://service.local:5000/download/abc123.../video_20250116_120000.mp4",
-        "download_url": "http://public.example.com/download/abc123.../video_20250116_120000.mp4",
-        "expires_at": "2025-01-17T12:00:00.123456"
-      }
-    ],
-    "total_files": 1,
-    "metadata_url": "http://public.example.com/download/abc123.../metadata.json",
-    "metadata_url_internal": "http://service.local:5000/download/abc123.../metadata.json",
-    "ttl_seconds": 86400,
-    "ttl_human": "24h"
-  },
-  
-  "webhook": {
-    "url": "https://your-webhook.com/callback",
-    "headers": {"X-API-Key": "***"},
-    "status": "delivered",
-    "attempts": 1,
-    "last_attempt": "2025-01-16T12:00:11.123456",
-    "last_status": 200,
-    "task_id": "abc123..."
-  },
-  "client_meta": {"user_id": 123}
+    "duration": 212,
+    "thumbnail": "https://i.ytimg.com/...",
+    "uploader": "Channel Name",
+    "platform": "YouTube"
+  }
 }
 ```
 
-**Response (error):**
+**Response (failed):**
 ```json
 {
-  "task_id": "abc123...",
-  "status": "error",
-  "operation": "download_video_async",
-  "error_type": "private_video|unavailable|deleted|...",
-  "error_message": "Error description",
-  "user_action": "Recommended action",
-  "raw_error": "...",
-  "failed_at": "2025-01-16T12:00:00.123456",
-  "client_meta": {"user_id": 123}
+  "task_id": "b0b8d187-...",
+  "status": "failed",
+  "failed_at": "2026-01-01T12:00:05",
+  "error": {
+    "code": "VIDEO_UNAVAILABLE",
+    "message": "..."
+  }
 }
 ```
 
-### 4. Download File or Metadata
+**Status values:** `queued` → `processing` → `completed` / `failed`
 
-```bash
-GET /download/<task_id>/<filename>
-GET /download/<task_id>/metadata.json
+---
+
+### GET /download/\<task_id\>/\<filename\>
+
+Returns the file as an attachment. File is available for 24 hours after task completion.
+
+---
+
+### GET /api/version
+
+```json
+{
+  "service": "youtube-downloader-api",
+  "version": "2.0.0",
+  "supported_platforms": ["YouTube"]
+}
 ```
+
+All endpoints are also available under `/api/v1/` prefix.
 
 ---
 
 ## Configuration
 
-### Environment Variables
-
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `API_KEY` | — | Enables public mode (Bearer required). When unset, internal mode (no auth). |
-| `PUBLIC_BASE_URL` | — | External base for absolute URLs (https://domain.com/api). Used only if `API_KEY` is set. |
-| `INTERNAL_BASE_URL` | — | Base for background URL generation (webhooks, Docker network). |
-| `LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL). |
+| `SERVER_BASE_URL` | `http://localhost:5000` | Base URL used in `download_url` links |
+| `API_KEY` | — | Enables Bearer token auth when set |
+| `MAX_DOWNLOAD_VIDEO_SIZE_MB` | `2048` | Max video size in MB |
+| `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `TASKS_DIR` | `/app/tasks` | Task storage directory |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL |
 
-### URL Configuration
-
-**Internal mode (auth=disabled):**
-- No `API_KEY` and no `PUBLIC_BASE_URL`
-- URLs built from `request.host_url` or `INTERNAL_BASE_URL`
-- No authentication required
-
-**Public mode (auth=enabled):**
-- Both `PUBLIC_BASE_URL` and `API_KEY` are set
-- External URLs use `PUBLIC_BASE_URL`
-- Internal URLs use `INTERNAL_BASE_URL` or `request.host_url`
-- Authentication required: `Authorization: Bearer <API_KEY>`
-
-### File Storage
-
-```
-/app/tasks/{task_id}/
-  ├── video_*.mp4       # Downloaded video files (TTL: 24 hours in public version)
-  └── metadata.json     # Task metadata (TTL: 24 hours in public version)
-```
-
-**Cleanup (Public Version):**
-- ⚠️ **Fixed at 24 hours** - not configurable in public version
-- Files automatically deleted 24 hours after download
-- For configurable TTL, use [YouTube Downloader API Pro](https://github.com/alexbic/youtube-downloader-api-pro)
-
-### Webhook Resender
-
-The public version includes a **background webhook resender service** that automatically retries failed webhook deliveries:
-
-**How it works:**
-- Scans all tasks every **15 minutes** (fixed interval, not configurable)
-- Retries webhooks for tasks with status `completed` or `error` that haven't received successful delivery (HTTP 200-299)
-- Continues retrying until task is deleted by TTL cleanup (24 hours)
-- Webhook configuration is persisted in task metadata (accessible via `/task/{task_id}` response)
-
-**Delivery attempts:**
-1. **Immediate retries**: 3 attempts with 5-second intervals (on task completion)
-2. **Background retries**: Every 15 minutes until successful or TTL expires
-
-**Configuration:**
-- Specify `webhook.url` and optional `webhook.headers` in each request
-- Monitor webhook delivery in logs (set `LOG_LEVEL=DEBUG` for detailed webhook payload preview)
-- Per-request headers allow flexible authentication per webhook
+**Fixed limits (not configurable):**
+- Workers: 2
+- Task TTL: 24 hours
+- Redis: built-in, 256 MB
 
 ---
 
-## Cookies Setup (YouTube Restrictions Bypass)
+## Authentication
 
-YouTube may block downloads requiring authentication. Use cookies to bypass this.
-
-**Important:**
-- YouTube rotates cookies in regular browser tabs
-- Export cookies from **private/incognito window** using special method
-
-### Method 1: Browser Extension (Recommended)
-
-**Step 1: Enable extension in incognito mode**
-
-**Chrome:**
-1. Open `chrome://extensions/`
-2. Find [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
-3. Click **"Details"**
-4. Enable **"Allow in incognito"**
-
-**Firefox:**
-1. Open `about:addons`
-2. Find [cookies.txt](https://addons.mozilla.org/en/firefox/addon/cookies-txt/)
-3. Enable **"Run in Private Windows"**
-
-**Step 2: Export cookies**
-
-1. Open **new private/incognito window** and log in to YouTube
-2. Navigate to `https://www.youtube.com/robots.txt`
-3. Export cookies for `youtube.com` using the extension
-4. **Immediately close** the private window
-
-### Method 2: DevTools (No Extension)
-
-1. Open **new private/incognito window** and log in to YouTube
-2. Navigate to `https://www.youtube.com/robots.txt`
-3. Open **DevTools** (F12 or Cmd+Option+I)
-4. Go to **Console** tab
-5. Copy and execute:
-
-```javascript
-copy(document.cookie.split('; ').map(c => {
-  const [name, ...v] = c.split('=');
-  return `.youtube.com\tTRUE\t/\tTRUE\t0\t${name}\t${v.join('=')}`;
-}).join('\n'))
+When `API_KEY` is set, protected endpoints require:
+```
+Authorization: Bearer <API_KEY>
 ```
 
-6. Cookies copied to clipboard - paste into `cookies.txt`
-7. **Add to file start:** `# Netscape HTTP Cookie File`
-8. **Immediately close** the private window
-
-### Using Cookies
-
-1. Place `cookies.txt` next to `docker-compose.yml`
-2. Uncomment volume in compose:
-
-```yaml
-volumes:
-  - ./cookies.txt:/app/cookies.txt
-```
-
-3. Restart: `docker-compose up -d`
-
-**Done!** API automatically uses cookies and updates timestamp before each request.
-
-### PO Token (Modern Videos)
-
-YouTube is gradually requiring "PO Token" for downloads. If cookies don't help:
-- Check [PO Token Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide)
-- Recommended: use `mweb` client with PO Token
-- Some formats may be unavailable without token
-
-**Additional Resources:**
-- [Export YouTube Cookies Guide](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies)
-- [Common YouTube Errors](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#common-youtube-errors)
-- Recommended: 5-10 second delay between requests
-- Rate limits: ~300 videos/hour (guests), ~2000 videos/hour (accounts)
+Protected: `POST /download_video`
+Public: `GET /health`, `GET /task_status/<id>`, `GET /download/<path>`, `GET /api/version`
 
 ---
 
-## Webhook Support
+## Webhook
 
-If `webhook.url` is provided in `POST /download_video`, the service POSTs to the URL on task completion.
+When `webhook_url` is provided, a POST is sent on task completion or failure.
 
-### Per-Request Webhook Headers
-
-You can specify custom headers for each webhook using the `webhook.headers` field in the request body.
-
-```json
-{
-  "url": "https://youtube.com/watch?v=...",
-  "async": true,
-  "webhook": {
-    "url": "https://your-webhook.com/endpoint",
-    "headers": {
-      "X-API-Key": "your-secret-key",
-      "Authorization": "Bearer token123",
-      "X-Custom-Header": "custom-value"
-    }
-  }
-}
-```
-
-Validation rules:
-- Must be a JSON object/dict with string keys and values
-- Header name max length: 256 characters
-- Header value max length: 2048 characters
-- `Content-Type` is always `application/json` and cannot be overridden
-
-Use cases:
-- Different API keys for different webhooks
-- Request-specific authorization tokens
-- Custom tracing/correlation IDs
-- Client-specific identification headers
-
-Example request with webhook headers:
-```json
-{
-  "url": "https://youtube.com/watch?v=...",
-  "async": true,
-  "webhook": {
-    "url": "http://webhook:9001/webhook",
-    "headers": {
-      "Authorization": "Bearer local-test-token",
-      "X-Source": "ytdl"
-    }
-  }
-}
-```
-
-Resulting webhook request headers:
-```
-Content-Type: application/json
-Authorization: Bearer local-test-token
-X-Source: ytdl
-```
-
-Note: Delivery uses hardcoded retry policy (3 attempts, 5s interval, 8s timeout). Failures never abort the main download process.
-
-**Success payload:**
+**Payload (completed):**
 ```json
 {
   "task_id": "...",
   "status": "completed",
-  "video_id": "...",
-  "title": "...",
-  "filename": "...mp4",
-  "download_endpoint": "/download/.../...mp4",
-  "storage_rel_path": ".../...mp4",
-  "duration": 213,
-  "resolution": "640x360",
-  "ext": "mp4",
-  "created_at": "2025-01-16T06:18:46.629918",
-  "completed_at": "2025-01-16T06:18:56.338989",
-  "expires_at": "2025-01-17T06:18:46.629918",
-  "task_download_url_internal": "http://service.local:5000/download/...",
-  "metadata_url_internal": "http://service.local:5000/download/.../metadata.json",
-  "client_meta": {"your":"meta"},
-  "webhook": {
-    "url": "http://n8n:5678/webhook/...",
-    "headers": {"X-API-Key": "secret123"},
-    "status": "delivered",
-    "attempts": 1,
-    "last_attempt": "2025-01-16T06:18:56.500000",
-    "last_status": 200,
-    "last_error": null,
-    "next_retry": null
-  }
+  "result": { ... },
+  "client_meta": { ... }
 }
 ```
 
-**Error payload:**
+**Payload (failed):**
 ```json
 {
   "task_id": "...",
-  "status": "error",
-  "operation": "download_video_async",
-  "error_type": "private_video|unavailable|deleted|...",
-  "error_message": "...",
-  "user_action": "...",
-  "failed_at": "2025-01-16T06:20:00.000000",
-  "client_meta": {"your":"meta"}
+  "status": "failed",
+  "error": { "code": "...", "message": "..." },
+  "client_meta": { ... }
 }
 ```
 
-**Configuration:**
-- `webhook.url` must start with http(s):// and be < 2048 characters
-- Timeout: 8s (hardcoded in public version)
-- Retry attempts: 3 (hardcoded in public version)
-- Retry interval: 5s (hardcoded in public version)
-- Delivery is best-effort (errors don't fail the main process)
+Delivery: 3 immediate attempts with exponential backoff, then background resender every 15 minutes until TTL expires.
 
 ---
 
-## Integration Examples
+## Architecture
 
-### cURL
+Single Docker image running 4 processes via Supervisor:
 
-```bash
-# Download video
-curl -X POST http://localhost:5000/download_video \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $API_KEY" \
-  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "quality": "best[height<=480]"}'
+```
+bgutil (priority 5)        — Node.js PO Token server (port 4416)
+redis (priority 10)        — Built-in Redis
+orchestrator (priority 20) — Recovery, crash detection, webhook resender
+gunicorn (priority 40)     — Flask API, 2 workers (starts after orchestrator)
 ```
 
-### Python
-
-```python
-import requests
-
-# Download video
-response = requests.post('http://localhost:5000/download_video', json={
-    'url': 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-    'client_meta': {'project': 'demo', 'user_id': 123}
-})
-
-data = response.json()
-print(f"Download URL: {data['task_download_url']}")
-```
-
-### JavaScript (Node.js)
-
-```javascript
-const axios = require('axios');
-
-// Download video (async mode)
-async function downloadVideo(videoUrl) {
-  const response = await axios.post('http://localhost:5000/download_video', {
-    url: videoUrl,
-    async: true,
-    client_meta: {project: 'demo'}
-  });
-
-  const taskId = response.data.task_id;
-  console.log('Task started:', taskId);
-
-  // Poll status
-  while (true) {
-    const status = await axios.get(`http://localhost:5000/task_status/${taskId}`);
-
-    if (status.data.status === 'completed') {
-      console.log('Download URL:', status.data.task_download_url);
-      break;
-    } else if (status.data.status === 'error') {
-      console.error('Error:', status.data.error_message);
-      break;
-    }
-
-    await new Promise(r => setTimeout(r, 2000)); // wait 2s
-  }
-}
-```
-
-### n8n Workflow
-
-**Recommended Schema:**
-
-**Step 0: Configure n8n for large files**
-
-Add to your n8n docker-compose.yml:
-```yaml
-services:
-  n8n:
-    environment:
-      - N8N_DEFAULT_BINARY_DATA_MODE=filesystem
-```
-
-**Option A (sync, simpler):**
-1. POST `http://youtube_downloader:5000/download_video` with body `{"url": "..."}`
-2. Use `task_download_url` from response to download file (Response Format: File, Binary Property: data)
-
-**Option B (async, more reliable):**
-1. POST `/download_video` with `{"url":"...","async":true}` - get `task_id`
-2. Poll `/task_status/{{task_id}}` until `status=completed`
-3. Download `{{ $json.task_download_url }}` (Response Format: File, Binary Property: data)
-
-**Critical:**
-1. n8n must have `N8N_DEFAULT_BINARY_DATA_MODE=filesystem`
-2. Set "Response Format" to "File" in download node
-3. Without proper config, n8n will try to load video into memory and fail with "Cannot create a string longer than 0x1fffffe8 characters"
+Gunicorn waits for `/tmp/system-ready` written by orchestrator before accepting connections.
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
+**YouTube 403 / "Sign in to confirm you're not a bot"**
+- bgutil handles PO Token automatically — this should not occur for public videos
+- Check bgutil is running: `docker logs ytdl | grep bgutil`
 
-#### 1. YouTube blocks downloads
+**Task stuck in `processing`**
+- Orchestrator detects crashes via heartbeat (90s timeout) and re-enqueues automatically
+- Check logs: `docker logs ytdl`
 
-**Problem:** `Sign in to confirm you're not a bot` or `Private video`
+**File not found (404)**
+- Files are auto-deleted 24 hours after task creation
+- Download immediately after status becomes `completed`
 
-**Solutions:**
-- Use cookies from private/incognito window (see Cookies Setup section)
-- Add 5-10 second delay between requests
-- Consider using PO Token for modern videos
-- Check if video is actually private/deleted/age-restricted
-
-#### 2. n8n Error: "Cannot create a string longer than 0x1fffffe8 characters"
-
-**Problem:** n8n tries to load large video into memory
-
-**Solutions:**
-1. Configure n8n: `N8N_DEFAULT_BINARY_DATA_MODE=filesystem` (recommended)
-2. Set "Response Format" to "File" in HTTP Request node
-3. Use "Binary Property": `data`
-
-#### 3. Webhook not received
-
-**Problem:** Webhook payload not arriving
-
-**Solutions:**
-- Check webhook URL is accessible from container
-- API retries 3 times with 5s interval
-- Check container logs: `docker logs youtube-downloader`
-- Verify webhook endpoint accepts POST requests
-- Use absolute URLs (http/https)
-
-#### 4. Direct URL returns 403 Forbidden
-
-**Problem:** Direct URL expired or blocked
-
-**Solutions:**
-- Direct URLs have limited lifetime (few hours)
-- Use `/download_video` instead for reliable downloads
-- Download immediately after receiving direct URL
-- Add required http_headers from response
-
-#### 5. Redis connection failed
-
-**Problem:** `Could not connect to Redis`
-
-**Note:** Public version has **embedded Redis** - this error should not occur. If you see this error:
-- Restart the container: `docker restart yt-downloader`
-- Check container logs: `docker logs yt-downloader`
-- For external Redis configuration, use [YouTube Downloader API Pro](https://github.com/alexbic/youtube-downloader-api-pro)
-
-#### 6. Files not found after download
-
-**Problem:** `404 File not found`
-
-**Solutions:**
-- Files auto-delete after 24 hours in public version (not configurable)
-- Download immediately after `status: "completed"`
-- For configurable TTL or permanent storage, use [YouTube Downloader API Pro](https://github.com/alexbic/youtube-downloader-api-pro)
-
-#### 7. Authentication errors
-
-**Problem:** `401 Unauthorized` or `Invalid API key`
-
-**Solutions:**
-- If `API_KEY` is set, all protected endpoints require `Authorization: Bearer <key>`
-- Protected endpoint: `/download_video`
-- Public endpoints (no auth): `/health`, `/task_status`, `/download`
-- If using internal Docker mode, unset `API_KEY` entirely
-
-#### 8. Client metadata validation errors
-
-**Problem:** `client_meta validation failed` or `client_meta too large`
-
-**Solutions:**
-- Max size: 16 KB (JSON UTF-8)
-- Max depth: 5 levels
-- Max keys: 200 total
-- Max string length: 1000 characters
-- Max list length: 200 items
-- Use flat structure when possible
-
-### Logging
-
-**View container logs:**
-```bash
-# Real-time logs
-docker logs -f youtube-downloader
-
-# Last 100 lines
-docker logs --tail 100 youtube-downloader
-
-# With timestamps
-docker logs -t youtube-downloader
-```
-
-**Log levels:**
-- `DEBUG` - verbose logging including yt-dlp options
-- `INFO` - standard logging (default)
-- `WARNING` - warnings only
-- `ERROR` - errors only
-- `CRITICAL` - critical errors only
-
-**Progress logging modes:**
-- `off` (default) - no progress spam
-- `compact` - compact progress every N% (configurable via `PROGRESS_STEP`)
-- `full` - detailed yt-dlp progress (very verbose)
+**Redis unavailable**
+- Redis is embedded in the container — restart the container: `docker restart ytdl`
 
 ---
 
-## Development
-
-### Local Build
+## Build Locally
 
 ```bash
 git clone https://github.com/alexbic/youtube-downloader-api.git
 cd youtube-downloader-api
-docker build -t youtube-downloader:local .
-docker run -p 5000:5000 youtube-downloader:local
+docker build -t youtube-downloader-api:local .
+docker run -d -p 5000:5000 -e SERVER_BASE_URL=http://localhost:5000 youtube-downloader-api:local
 ```
-
-### Local Run (without Docker)
-
-```bash
-pip install -r requirements.txt
-python app.py
-```
-
----
-
-## CI/CD
-
-GitHub Actions automatically builds and publishes Docker images on every push to `main`:
-
-1. Builds for platforms: linux/amd64, linux/arm64
-2. Publishes to Docker Hub: `alexbic/youtube-downloader-api`
-3. Publishes to GitHub Container Registry: `ghcr.io/alexbic/youtube-downloader-api`
-4. Updates Docker Hub description
-
-Build status: [GitHub Actions](https://github.com/alexbic/youtube-downloader-api/actions)
 
 ---
 
 ## Technologies
 
-- Python 3.11
-- Flask 3.0.0
-- yt-dlp (latest)
-- FFmpeg
-- Gunicorn
-- Redis (optional)
-- Docker
+- Python 3.11 + Flask 3.0 + Gunicorn
+- yt-dlp + FFmpeg
+- bgutil-ytdlp-pot-provider (Node.js + Deno)
+- Redis (embedded)
+- Supervisor
 
 ---
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file
-
----
-
-## 🚀 YouTube Downloader API Pro
-
-**Coming Soon!** The Pro version is currently in development and will be available shortly.
-
-### What's Coming in Pro Version
-
-The Pro version will include:
-
-- 🗄️ **PostgreSQL Storage** - Persistent task history and metadata
-- ⚙️ **Fully Configurable** - Customize workers (1-10+), TTL (hours to months), external Redis
-- 📊 **Processing Results Cache** - Store and query yt-dlp output for analytics
-- 🔍 **Advanced Search & Filtering** - Query tasks by status, date range, client_meta fields
-- 📈 **Task Statistics** - Track success rate, processing time, bandwidth usage
-- 🔄 **Priority Queue** - VIP task processing with configurable priorities
-- 📧 **Email Notifications** - Task completion alerts
-- 👨‍💼 **Priority Support** - Direct email and GitHub support
-- 📚 **Extended Documentation** - Detailed guides and best practices
-
-### Distribution Model (In Development)
-
-We're currently evaluating the best way to deliver the Pro version:
-
-**Option 1: GitHub Private Repository (Subscription)**
-- Access via GitHub team/organization membership
-- Clone repository with your credentials
-- Automatic updates via git pull
-- Pro: Simple, familiar workflow for developers
-- Con: Requires GitHub account
-
-**Option 2: Docker Registry (License Key)**
-- Pull Pro image from private registry with license key
-- `docker pull pro.yourdomain.com/youtube-downloader-api-pro:latest`
-- License validation on startup
-- Pro: No source code exposure, easy deployment
-- Con: Requires license server infrastructure
-
-**Option 3: npm/PyPI Private Package**
-- Install via private package registry
-- `pip install --extra-index-url https://pypi.yourdomain.com youtube-downloader-api-pro`
-- Pro: Standard package management
-- Con: Additional infrastructure needed
-
-**Option 4: Landing Page with Direct Downloads**
-- Purchase on landing page → receive download link
-- Manual updates via re-download
-- Pro: Simple, no infrastructure
-- Con: Manual update process
-
-**Option 5: Hybrid Approach**
-- Landing page for purchase and license key generation
-- Private Docker registry for Pro images
-- GitHub private repo for enterprise customers
-- Pro: Flexible, caters to different customer needs
-- Con: More complex to maintain
-
-### Current Status
-
-🔨 **In Active Development**
-- Core Pro features are being implemented in `youtube-downloader-api-pro` repository
-- Testing deployment and licensing models
-- Preparing documentation and landing page
-
-📧 **Get Notified**
-Interested in the Pro version? Contact us to be notified when it launches:
-- Email: support@alexbic.net
-- GitHub: Watch the repository for announcements
-
-### Pricing (Preliminary)
-
-We're considering the following pricing tiers:
-
-- **Individual License**: $XX/month or $XXX/year - Single deployment
-- **Team License**: $XXX/month or $XXXX/year - Up to 5 deployments
-- **Enterprise License**: Custom pricing - Unlimited deployments + SLA
-
-*Pricing is subject to change before official launch*
+MIT — see [LICENSE](LICENSE)
 
 ---
 
 ## Support
 
-- GitHub: [@alexbic](https://github.com/alexbic)
 - Issues: [GitHub Issues](https://github.com/alexbic/youtube-downloader-api/issues)
-- Pro Version Inquiries: support@alexbic.net
-
----
-
-## Disclaimer
-
-This tool is for personal use. Ensure you comply with YouTube's Terms of Service and copyright laws when downloading content.
+- Email: support@alexbic.net

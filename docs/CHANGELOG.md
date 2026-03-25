@@ -108,7 +108,6 @@ docker build -t alexbic/youtube-downloader-api:2.0.0 .
 - **Bearer token authentication** - optional API key protection for public deployments
 - **Absolute URLs support** - internal and external URL generation
 - **Built-in embedded Redis** - standalone container with 256MB Redis
-- **Cookie support** - bypass YouTube restrictions using browser cookies
 - **Auto cleanup** - automatic task deletion after 24h TTL
 - **Docker multi-arch support** - amd64 and arm64 architectures
 - **Client metadata** - arbitrary JSON passthrough (max 4096 bytes)

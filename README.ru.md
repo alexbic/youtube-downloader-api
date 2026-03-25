@@ -1,15 +1,10 @@
 # YouTube Downloader API
 
-**Open Source** REST API для скачивания видео с YouTube и получения прямых ссылок на видеофайлы.
+REST API для скачивания видео с YouTube на основе yt-dlp, упакованный в standalone Docker-контейнер.
 
 [![Docker Hub](https://img.shields.io/docker/v/alexbic/youtube-downloader-api?label=Docker%20Hub&logo=docker)](https://hub.docker.com/r/alexbic/youtube-downloader-api)
-[![GitHub Container Registry](https://img.shields.io/badge/ghcr.io-image-blue?logo=github)](https://github.com/alexbic/youtube-downloader-api/pkgs/container/youtube-downloader-api)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-1.1.0-blue)](docs/RELEASE_NOTES_v1.1.0.md)
-[![Changelog](https://img.shields.io/badge/changelog-1.1.0-blue)](docs/CHANGELOG.md)
-
-> ⚠️ **ПУБЛИЧНАЯ ВЕРСИЯ**: Это бесплатная, ограниченная версия с фиксированными лимитами (2 воркера, TTL 24ч, 256MB Redis).
-> 🚀 **Нужно больше?** Посмотрите [YouTube Downloader API Pro](https://github.com/alexbic/youtube-downloader-api-pro) - хранилище PostgreSQL, настраиваемый TTL, кеш результатов и многое другое!
+[![Version](https://img.shields.io/badge/version-2.0.0-blue)](docs/CHANGELOG.md)
 
 [English](README.md) | **Русский**
 
@@ -17,138 +12,49 @@
 
 ## Возможности
 
-- 🎬 **Получение прямых URL** - получение прямых ссылок на видео без скачивания
-- ⬇️ **Серверное скачивание** - загрузка видео на сервер с выбором качества (sync/async)
-- 📊 **Информация о видео** - получение полных метаданных
-- 🔄 **Синхронный и асинхронный режимы** - выбор между немедленной или фоновой обработкой
-- 🔗 **Поддержка webhook** - POST уведомления при завершении задачи с автоматическими повторами
-- 🔁 **Webhook resender** - фоновый сервис повторяет неудавшиеся webhook каждые 15 минут
-- 🔧 **Автоматическое восстановление задач** - возобновление прерванных задач при перезапуске, повтор неудачных задач с backoff
-- 🔑 **Опциональная аутентификация** - поддержка Bearer токенов для публичных развертываний
-- 🌐 **Абсолютные URL** - поддержка внутренних и внешних URL
-- 📦 **Поддержка Redis** - хранилище задач для нескольких воркеров (встроенный Redis)
-- 🔒 **Поддержка cookies** - обход ограничений YouTube
-- 🧹 **Автоочистка** - автоматическое удаление файлов через 24 часа (фиксировано в публичной версии)
-- 🐳 **Готов для Docker** - поддержка мульти-архитектур (amd64, arm64)
-- 📝 **Метаданные клиента** - передача произвольных JSON через весь workflow
+- ⬇️ **Асинхронные загрузки** — отправь задачу, опрашивай статус, скачай файл
+- 🔗 **Webhook уведомления** — POST-колбэк при завершении с автоматическими повторами
+- 🔄 **Восстановление задач** — прерванные задачи повторно ставятся в очередь при перезапуске
+- 🛡️ **bgutil PO Token** — обход YouTube SABR ограничений (требуется с 2024 года)
+- 🔑 **Опциональная Bearer-аутентификация** — защита эндпоинтов API-ключом
+- 🧹 **Автоочистка** — файлы удаляются через 24 часа
+- 🐳 **Standalone контейнер** — Redis, bgutil, оркестратор и gunicorn в одном образе
 
 ---
 
 ## Быстрый старт
 
-### Из Docker Hub (Публичная версия)
-
-**Особенности публичной версии:**
-- ✅ Автономный контейнер со встроенным Redis
-- ✅ Фиксированные лимиты: 2 воркера, TTL 24ч, 256MB Redis
-- ✅ Без внешних зависимостей
-- ⚠️ Не настраивается (для гибкой настройки используйте Pro версию)
-
 ```bash
 docker pull alexbic/youtube-downloader-api:latest
-docker run -d -p 5000:5000 --name yt-downloader alexbic/youtube-downloader-api:latest
+docker run -d -p 5000:5000 \
+  -e SERVER_BASE_URL=http://localhost:5000 \
+  --name ytdl alexbic/youtube-downloader-api:latest
 ```
 
-### Тестирование API
-
+**Проверка:**
 ```bash
-# Проверка здоровья
 curl http://localhost:5000/health
+```
 
-# Скачать видео (синхронно)
+**Скачать видео:**
+```bash
+# Отправить задачу
 curl -X POST http://localhost:5000/download_video \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
+
+# {"task_id": "abc123...", "status": "queued", ...}
+
+# Проверить статус
+curl http://localhost:5000/task_status/abc123...
+
+# Скачать файл после завершения
+curl -O -J "http://localhost:5000/download/abc123.../filename.webm"
 ```
 
 ---
 
-## Установка
-
-### Запуск с cookies для обхода защиты YouTube
-
-YouTube может периодически блокировать загрузки, требуя авторизацию.
-
-**⚠️ Важно про cookies:**
-- YouTube ротирует cookies в открытых вкладках как меру безопасности
-- Cookies, экспортированные из обычной вкладки, быстро протухают
-- Нужно экспортировать через **приватное окно** по специальной методике
-
-#### Метод 1: Через расширение браузера (рекомендуется)
-
-**Шаг 1. Включите расширение в режиме инкогнито:**
-
-**Chrome:**
-1. Откройте `chrome://extensions/`
-2. Найдите расширение [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
-3. Нажмите **"Подробнее"** (Details)
-4. Включите **"Разрешить использование в режиме инкогнито"** (Allow in incognito)
-
-**Firefox:**
-1. Откройте `about:addons`
-2. Найдите расширение [cookies.txt](https://addons.mozilla.org/ru/firefox/addon/cookies-txt/)
-3. Включите **"Выполнять в приватных окнах"** (Run in Private Windows)
-
-**Шаг 2. Экспортируйте cookies:**
-
-1. Откройте **новое приватное/инкогнито окно** и залогиньтесь на YouTube
-2. Перейдите на `https://www.youtube.com/robots.txt`
-3. Экспортируйте cookies для `youtube.com` через расширение (теперь оно работает!)
-4. **Сразу закройте** приватное окно
-
-#### Метод 2: Через DevTools (без расширений)
-
-1. Откройте **новое приватное/инкогнито окно** и залогиньтесь на YouTube
-2. Перейдите на `https://www.youtube.com/robots.txt`
-3. Откройте **DevTools** (F12 или Cmd+Option+I)
-4. Перейдите на вкладку **Console**
-5. Скопируйте и выполните команду:
-
-```javascript
-copy(document.cookie.split('; ').map(c => {
-  const [name, ...v] = c.split('=');
-  return `.youtube.com\tTRUE\t/\tTRUE\t0\t${name}\t${v.join('=')}`;
-}).join('\n'))
-```
-
-6. Cookies скопированы в буфер обмена — вставьте в файл `cookies.txt`
-7. **Добавьте в начало файла:** `# Netscape HTTP Cookie File`
-8. **Сразу закройте** приватное окно
-
-**Примечания:**
-- НЕ используйте `--cookies-from-browser` — он берёт cookies из обычного браузера
-- DevTools даёт базовый формат; для продакшена лучше расширение
-
-#### Использование cookies:
-
-1. Положите `cookies.txt` рядом с `docker-compose.yml`
-2. Раскомментируйте строку:
-
-```yaml
-volumes:
-  - ./cookies.txt:/app/cookies.txt
-```
-
-3. Перезапустите: `docker-compose up -d`
-
-**Готово!** API автоматически использует cookies и обновляет timestamp перед каждым запросом.
-
-#### PO Token (для современных видео):
-
-YouTube постепенно вводит обязательное использование "PO Token" для скачивания. Если cookies не помогают:
-- Изучите [PO Token Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide)
-- Рекомендуется использовать `mweb` клиент с PO Token
-- По умолчанию yt-dlp пытается использовать клиенты без токена, но некоторые форматы могут быть недоступны
-
-**Дополнительная информация:**
-- [Как правильно экспортировать YouTube cookies](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies)
-- [Типичные ошибки YouTube](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#common-youtube-errors)
-- Рекомендуется добавить задержку 5-10 секунд между запросами
-- Лимит для гостей: ~300 видео/час, для аккаунтов: ~2000 видео/час
-
-### Docker Compose (Кастомная настройка)
-
-> ⚠️ **Примечание**: Публичная версия имеет встроенный Redis. Этот пример только для кастомных развертываний.
+## Docker Compose
 
 ```yaml
 version: '3.8'
@@ -159,842 +65,256 @@ services:
       - "5000:5000"
     volumes:
       - ./tasks:/app/tasks
-      # - ./cookies.txt:/app/cookies.txt  # при необходимости
     environment:
-      # Публичный базовый URL для внешних ссылок (https://yourdomain.com/api)
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
-      # API ключ для аутентификации (Bearer токен)
-      API_KEY: ${API_KEY}
+      SERVER_BASE_URL: ${SERVER_BASE_URL:-http://localhost:5000}
+      API_KEY: ${API_KEY:-}
     restart: unless-stopped
 ```
 
-## API Endpoints
+---
 
-### 1. Health Check
+## API
 
-```bash
-GET /health
-```
+### GET /health
 
-Ответ (поля могут отличаться в зависимости от конфигурации):
 ```json
 {
-  "status": "healthy",
-  "timestamp": "2024-01-15T10:30:00.123456",
-  "auth": "enabled|disabled",
-  "storage": "redis|memory"
+  "status": "ok",
+  "redis": "ok",
+  "active_tasks": 0,
+  "queued_tasks": 0,
+  "max_concurrent_tasks": 2,
+  "worker_id": "worker-12",
+  "timestamp": "2026-01-01T12:00:00Z"
 }
 ```
 
-### 2. Скачать видео (sync/async)
+---
 
-```bash
-POST /download_video
-Content-Type: application/json
-```
+### POST /download_video
 
-Пример валидного JSON (async):
+**Запрос:**
 ```json
 {
-  "url": "https://www.youtube.com/watch?v=pj8lIC7kP6I",
-  "async": true,
-  "quality": "best[height<=720]",
-  "client_meta": {"videoId": "pj8lIC7kP6I"}
+  "url": "https://www.youtube.com/watch?v=VIDEO_ID",
+  "format": "bestvideo+bestaudio/best",
+  "max_size_mb": 2048,
+  "webhook_url": "https://your-server.com/webhook",
+  "webhook_headers": {"Authorization": "Bearer secret"},
+  "client_meta": {"user_id": 123}
 }
 ```
 
-Пример валидного JSON (sync):
+| Поле | Тип | Обяз. | Описание |
+|------|-----|-------|----------|
+| `url` | string | ✅ | YouTube URL |
+| `format` | string | — | yt-dlp format string (по умолчанию: лучшее в пределах лимита) |
+| `max_size_mb` | int | — | Макс. размер файла в МБ (по умолчанию: 2048) |
+| `webhook_url` | string | — | URL для POST-колбэка при завершении |
+| `webhook_headers` | object | — | Заголовки для webhook-запроса |
+| `client_meta` | object | — | Произвольный JSON, пробрасываемый в webhook/статус |
+
+**Ответ `202`:**
 ```json
 {
-  "url": "https://www.youtube.com/watch?v=pj8lIC7kP6I",
-  "quality": "best[height<=720]",
-  "client_meta": {"videoId": "pj8lIC7kP6I"}
+  "task_id": "b0b8d187-...",
+  "status": "queued",
+  "created_at": "2026-01-01T12:00:00",
+  "platform": "YouTube"
 }
 ```
 
-Параметры:
-- `url` (обязательный) — ссылка на YouTube
-- `async` (опциональный, bool) — если true, задача выполняется асинхронно, иначе синхронно
-- `quality` (опциональный, string) — формат yt-dlp, по умолчанию `best[height<=720]`
-- `client_meta` (опциональный, object) — любые ваши метаданные; сохраняются в `metadata.json` и возвращаются в ответе
-- `webhook` (опциональный, object) — конфигурация webhook для callback в async-режиме
-  - `url` (обязательный, string) — URL для callback (http/https)
-  - `headers` (опциональный, object) — дополнительные заголовки для аутентификации webhook
+---
 
-Аутентификация, если включена (см. PUBLIC_BASE_URL + API_KEY): используйте заголовок
-`Authorization: Bearer <API_KEY>` (или совместимый `X-API-Key`).
-
-
-#### Пример ответа (sync) - Унифицированная структура метаданных:
-```json
-{
-  "task_id": "ab12cd34-...",
-  "status": "completed",
-  "created_at": "2025-11-14T21:28:00.123456",
-  "completed_at": "2025-11-14T21:28:11.123456",
-  "expires_at": "2025-11-15T21:28:00.123456",
-  
-  "input": {
-    "video_url": "https://www.youtube.com/watch?v=pj8lIC7kP6I",
-    "operations": ["download_video"],
-    "operations_count": 1,
-    "video_id": "pj8lIC7kP6I",
-    "title": "Название видео",
-    "duration": 180,
-    "resolution": "1280x720",
-    "ext": "mp4"
-  },
-  
-  "output": {
-    "output_files": [
-      {
-        "filename": "video_20251114_212811.mp4",
-        "download_path": "/download/ab12cd34.../video_20251114_212811.mp4",
-        "download_url_internal": "http://service.local:5000/download/ab12cd34.../video_20251114_212811.mp4",
-        "download_url": "http://public.example.com/download/ab12cd34.../video_20251114_212811.mp4",
-        "expires_at": "2025-11-15T21:28:00.123456"
-      }
-    ],
-    "total_files": 1,
-    "metadata_url": "http://public.example.com/download/ab12cd34.../metadata.json",
-    "metadata_url_internal": "http://service.local:5000/download/ab12cd34.../metadata.json",
-    "ttl_seconds": 86400,
-    "ttl_human": "24h"
-  },
-  
-  "webhook": null,
-  "client_meta": {"videoId": "pj8lIC7kP6I"}
-}
-```
-
-> **Примечание об URL:** 
-> - `download_url_internal` и `metadata_url_internal` - всегда присутствуют (внутренние Docker network URL)
-> - `download_url` и `metadata_url` - присутствуют только когда **оба** параметра `PUBLIC_BASE_URL` **и** `API_KEY` настроены
-
-#### Пример ответа (async) - Минимальная структура для отслеживания:
-```json
-{
-  "task_id": "ab12cd34-...",
-  "status": "processing",
-  "check_status_url": "http://public.example.com/task_status/ab12cd34-...",
-  "metadata_url": "http://public.example.com/download/ab12cd34.../metadata.json",
-  "check_status_url_internal": "http://service.local/task_status/ab12cd34-...",
-  "metadata_url_internal": "http://service.local/download/ab12cd34.../metadata.json",
-  "webhook": {
-    "url": "https://your-webhook.com/callback",
-    "headers": {"X-API-Key": "***"}
-  },
-  "client_meta": {"videoId": "pj8lIC7kP6I"}
-}
-```
-
-> **Важно:** В async-режиме ошибки (например, если видео приватное, удалено, заблокировано и т.д.) возвращаются только через `/task_status/<task_id>`. Сам ответ на POST всегда содержит только task_id и статус. Для получения результата или ошибки опрашивайте `/task_status/<task_id>`.
-
-В sync-режиме ошибка возвращается сразу с HTTP 400 и описанием ошибки.
-
-### 3. Проверить статус задачи
-
-```bash
-GET /task_status/<task_id>
-```
+### GET /task_status/\<task_id\>
 
 **Ответ (processing):**
 ```json
 {
-  "task_id": "...",
-  "status": "processing"
+  "task_id": "b0b8d187-...",
+  "status": "processing",
+  "started_at": "2026-01-01T12:00:01",
+  "platform": "YouTube",
+  "url": "https://www.youtube.com/watch?v=..."
 }
 ```
 
-**Ответ (completed) - Полная унифицированная структура:**
+**Ответ (completed):**
 ```json
 {
-  "task_id": "ab12cd34-...",
+  "task_id": "b0b8d187-...",
   "status": "completed",
-  "created_at": "2025-11-14T21:28:00.123456",
-  "completed_at": "2025-11-14T21:28:11.123456",
-  "expires_at": "2025-11-15T21:28:00.123456",
-  
-  "input": {
-    "video_url": "https://www.youtube.com/watch?v=pj8lIC7kP6I",
-    "operations": ["download_video"],
-    "operations_count": 1,
-    "video_id": "pj8lIC7kP6I",
-    "title": "Название видео",
-    "duration": 180,
-    "resolution": "1280x720",
-    "ext": "mp4"
-  },
-  
-  "output": {
-    "output_files": [
-      {
-        "filename": "video_20251114_212811.mp4",
-        "download_path": "/download/ab12cd34.../video_20251114_212811.mp4",
-        "download_url_internal": "http://service.local:5000/download/ab12cd34.../video_20251114_212811.mp4",
-        "download_url": "http://public.example.com/download/ab12cd34.../video_20251114_212811.mp4",
-        "expires_at": "2025-11-15T21:28:00.123456"
-      }
-    ],
-    "total_files": 1,
-    "metadata_url": "http://public.example.com/download/ab12cd34.../metadata.json",
-    "metadata_url_internal": "http://service.local:5000/download/ab12cd34.../metadata.json",
-    "ttl_seconds": 86400,
-    "ttl_human": "24h"
-  },
-  
-  "webhook": {
-    "url": "https://your-webhook.com/callback",
-    "headers": {"X-API-Key": "***"},
-    "status": "delivered",
-    "attempts": 1,
-    "last_attempt": "2025-11-14T21:28:12.123456",
-    "last_status": 200,
-    "task_id": "ab12cd34-..."
-  },
-  "client_meta": {"videoId": "pj8lIC7kP6I"}
-}
-```
-
-**Ответ (error):**
-```json
-{
-  "task_id": "...",
-  "status": "error",
-  "operation": "download_video",
-  "error_type": "private_video|unavailable|deleted|...",
-  "error_message": "Описание ошибки",
-  "user_action": "Рекомендуемое действие",
-  "raw_error": "..."
-}
-```
-
-### 4. Скачать результат или метаданные
-
-```bash
-GET /download/<task_id>/output/<file>
-GET /download/<task_id>/metadata.json
-```
-
-### 5. n8n: рекомендуемая схема (через /download_video)
-
-**Шаг 0: Настройте n8n для работы с большими файлами**
-
-Добавьте в docker-compose.yml вашего n8n стека:
-```yaml
-services:
-  n8n:
-    environment:
-      - N8N_DEFAULT_BINARY_DATA_MODE=filesystem
-```
-
-Перезапустите n8n после изменения конфигурации.
-
-Вариант A (sync, проще):
-1) POST http://youtube_downloader:5000/download_video (Body: `{ "url": "..." }`)
-2) В ответе используйте `task_download_url` для загрузки файла (Response Format: File, Binary Property: data)
-
-Вариант B (async, надёжнее для длительных задач):
-1) POST /download_video c `{"url":"...","async":true}` — получить `task_id`
-2) Циклически опрашивать `/task_status/{{task_id}}` до `status=completed`
-3) Скачать `{{ $json.task_download_url }}` (Response Format: File, Binary Property: data)
-
-**Критически важно**:
-1. n8n должен быть настроен с `N8N_DEFAULT_BINARY_DATA_MODE=filesystem`
-2. В Node 2 установите "Response Format" в значение "File"
-3. Без правильной конфигурации n8n будет пытаться загрузить видео в память и выдаст ошибку "Cannot create a string longer than 0x1fffffe8 characters"
-
-API автоматически вернёт абсолютные URL. Для внутренних сценариев есть дублирующие поля `*_internal`.
-
-Про `client_meta` в n8n: передавайте объект/массив как есть (не строку). Если формируете через Expression — не заключайте выражение в кавычки, чтобы избежать `"[object Object]"`.
-
-### 7. Webhook callbacks (async)
-
-Если в `POST /download_video` передан объект `webhook` с полем `url`, сервис по завершении задачи делает `POST` на указанный URL с `Content-Type: application/json`.
-
-Успешный payload (поля как в `task_status`, `client_meta` — последним):
-```json
-{
-  "task_id": "...",
-  "status": "completed",
-  "video_id": "...",
-  "title": "...",
-  "filename": "...mp4",
-  "download_endpoint": "/download/.../output/...mp4",
-  "storage_rel_path": ".../output/...mp4",
-  "duration": 213,
-  "resolution": "640x360",
-  "ext": "mp4",
-  "created_at": "2025-11-15T06:18:46.629918",
-  "completed_at": "2025-11-15T06:18:56.338989",
-  "expires_at": "2025-11-16T06:18:46.629918",
-  "task_download_url_internal": "http://service.local:5000/download/...",
-  "metadata_url_internal": "http://service.local:5000/download/.../metadata.json",
-  "client_meta": {"your":"meta"},
-  "webhook": {
-    "url": "http://n8n:5678/webhook/...",
-    "headers": {"X-API-Key": "secret123"},
-    "status": "delivered",
-    "attempts": 1,
-    "last_attempt": "2025-11-15T06:18:56.500000",
-    "last_status": 200,
-    "last_error": null,
-    "next_retry": null
+  "created_at": "2026-01-01T12:00:00",
+  "completed_at": "2026-01-01T12:00:09",
+  "platform": "YouTube",
+  "result": {
+    "filename": "Video Title.webm",
+    "download_url": "http://localhost:5000/download/b0b8d187-.../Video Title.webm",
+    "file_size_bytes": 47448900,
+    "title": "Video Title",
+    "duration": 212,
+    "thumbnail": "https://i.ytimg.com/...",
+    "uploader": "Channel Name",
+    "platform": "YouTube"
   }
 }
 ```
 
-Ошибка:
+**Ответ (failed):**
 ```json
 {
-  "task_id": "...",
-  "status": "error",
-  "operation": "download_video_async",
-  "error_type": "private_video|unavailable|deleted|...",
-  "error_message": "...",
-  "user_action": "...",
-  "failed_at": "2025-11-15T06:20:00.000000",
-  "client_meta": {"your":"meta"}
-}
-```
-
-Технические детали:
-- `webhook.url` должен начинаться с http(s):// и быть короче 2048 символов
-- `webhook.headers` — дополнительные заголовки для аутентификации (опционально)
-- Таймаут на отправку: 8 секунд (зашито в публичной версии)
-- Повторы доставки: 3 попытки с интервалом 5 секунд (зашито в публичной версии)
-- Ошибка доставки не прерывает основной процесс (best-effort)
-
-#### Кастомные заголовки для webhook
-
-Вы можете указать пользовательские заголовки для webhook используя поле `webhook.headers` в теле запроса.
-
-```json
-{
-  "url": "https://youtube.com/watch?v=...",
-  "async": true,
-  "webhook": {
-    "url": "https://your-webhook.com/endpoint",
-    "headers": {
-      "X-API-Key": "your-secret-key",
-      "Authorization": "Bearer token123",
-      "X-Custom-Header": "custom-value"
-    }
+  "task_id": "b0b8d187-...",
+  "status": "failed",
+  "failed_at": "2026-01-01T12:00:05",
+  "error": {
+    "code": "VIDEO_UNAVAILABLE",
+    "message": "..."
   }
 }
 ```
 
-Правила валидации:
-- Должен быть JSON объектом/словарём со строковыми ключами и значениями
-- Максимальная длина имени заголовка: 256 символов
-- Максимальная длина значения заголовка: 2048 символов
-- `Content-Type` всегда `application/json` и не может быть переопределён
+**Статусы:** `queued` → `processing` → `completed` / `failed`
 
-Варианты использования:
-- Разные API ключи для разных webhook
-- Токены авторизации специфичные для запроса
-- Пользовательские tracing/correlation ID
-- Заголовки идентификации клиента
+---
 
-## Примеры использования
+### GET /download/\<task_id\>/\<filename\>
 
-### cURL
+Возвращает файл как вложение. Доступен 24 часа после завершения задачи.
 
-```bash
-# Скачать видео
-curl -X POST http://localhost:5000/download_video \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $API_KEY" \
-  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "quality": "best[height<=480]"}'
-```
+---
 
-### Python
+### GET /api/version
 
-```python
-import requests
-
-# Скачать видео
-response = requests.post('http://localhost:5000/download_video', json={
-    'url': 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
-})
-
-data = response.json()
-download_url = f"http://localhost:5000{data['download_url']}"
-print(f"Download URL: {download_url}")
-```
-
-### JavaScript (Node.js)
-
-```javascript
-const axios = require('axios');
-
-// Пример скачивания видео
-async function downloadVideo(videoUrl) {
-  const response = await axios.post('http://localhost:5000/download_video', {
-    url: videoUrl,
-    quality: 'best[height<=720]'
-  });
-
-  return response.data.download_url;
+```json
+{
+  "service": "youtube-downloader-api",
+  "version": "2.0.0",
+  "supported_platforms": ["YouTube"]
 }
-
-// Использование
-downloadVideo('https://www.youtube.com/watch?v=dQw4w9WgXcQ')
-  .then(url => console.log('Download URL:', url))
-  .catch(err => console.error('Error:', err));
 ```
 
-## Разработка
+Все эндпоинты доступны также с префиксом `/api/v1/`.
 
-### Локальная сборка
+---
 
-```bash
-git clone https://github.com/alexbic/youtube-downloader-api.git
-cd youtube-downloader-api
-docker build -t yt-dl-api:test .
-docker run -p 5000:5000 yt-dl-api:test
-```
-
-### Локальный запуск без Docker
-
-```bash
-pip install -r requirements.txt
-python app.py
-```
-
-## CI/CD
-
-Проект настроен с автоматической сборкой и публикацией через GitHub Actions.
-
-При каждом push в `main` ветку автоматически:
-1. Собирается Docker образ для платформ linux/amd64 и linux/arm64
-2. Публикуется на Docker Hub: `alexbic/youtube-downloader-api`
-3. Публикуется на GitHub Container Registry: `ghcr.io/alexbic/youtube-downloader-api`
-4. Обновляется описание на Docker Hub
-
-Статус сборки можно посмотреть на [странице Actions](https://github.com/alexbic/youtube-downloader-api/actions)
-
-## Технологии
-
-- Python 3.11
-- Flask 3.0.0
-- yt-dlp (latest)
-- FFmpeg
-- Gunicorn
-- Docker
-
-## Конфигурация и аутентификация
-
-### Переменные окружения (Публичная версия)
+## Конфигурация
 
 | Переменная | По умолчанию | Описание |
-|----------|---------|-------------|
-| `API_KEY` | — | Включает публичный режим (требуется Bearer). Если не задан, внутренний режим (без авторизации). |
-| `PUBLIC_BASE_URL` | — | Внешний базовый URL для абсолютных ссылок (https://domain.com/api). Используется только если задан `API_KEY`. |
-| `INTERNAL_BASE_URL` | — | Базовый URL для генерации фоновых URL (webhooks, Docker сеть). |
-| `LOG_LEVEL` | `INFO` | Уровень логирования (DEBUG, INFO, WARNING, ERROR, CRITICAL). |
+|------------|-------------|----------|
+| `SERVER_BASE_URL` | `http://localhost:5000` | Базовый URL для ссылок в `download_url` |
+| `API_KEY` | — | Включает Bearer-аутентификацию если задан |
+| `MAX_DOWNLOAD_VIDEO_SIZE_MB` | `2048` | Макс. размер видео в МБ |
+| `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `TASKS_DIR` | `/app/tasks` | Директория хранения задач |
+| `REDIS_URL` | `redis://localhost:6379/0` | URL подключения к Redis |
 
-### Хранилище файлов
+**Фиксированные лимиты (не настраиваются):**
+- Воркеры: 2
+- TTL задач: 24 часа
+- Redis: встроенный, 256 МБ
 
+---
+
+## Аутентификация
+
+Если задан `API_KEY`, защищённые эндпоинты требуют:
 ```
-/app/tasks/{task_id}/
-  ├── video_*.mp4       # Скачанные видеофайлы (TTL: 24 часа в публичной версии)
-  └── metadata.json     # Метаданные задачи (TTL: 24 часа в публичной версии)
-```
-
-**Очистка (Публичная версия):**
-- ⚠️ **Фиксировано 24 часа** - не настраивается в публичной версии
-- Файлы автоматически удаляются через 24 часа после скачивания
-- Для настраиваемого TTL используйте [YouTube Downloader API Pro](https://github.com/alexbic/youtube-downloader-api-pro)
-
-### Webhook Resender
-
-Публичная версия включает **фоновый сервис повторной отправки webhook**, который автоматически повторяет неудавшиеся webhook:
-
-**Как работает:**
-- Сканирует все задачи каждые **15 минут** (фиксированный интервал, не настраивается)
-- Повторяет webhook для задач со статусом `completed` или `error`, которые не получили успешную доставку (HTTP 200-299)
-- Продолжает повторы до удаления задачи по TTL (24 часа)
-- Конфигурация webhook сохраняется в метаданных задачи (доступна через ответ `/task/{task_id}`)
-
-**Попытки доставки:**
-1. **Немедленные повторы**: 3 попытки с интервалом 5 секунд (при завершении задачи)
-2. **Фоновые повторы**: Каждые 15 минут до успешной доставки или истечения TTL
-
-**Конфигурация:**
-- Указывайте `webhook.url` и опциональные `webhook.headers` в каждом запросе
-- Мониторьте доставку webhook в логах (установите `LOG_LEVEL=DEBUG` для детального просмотра payload)
-- Per-request заголовки позволяют гибкую аутентификацию для каждого webhook
-
-### Как строятся ссылки
-- Относительный путь до файла: `download_endpoint` (HTTP endpoint) и `storage_rel_path` (относительный путь на диске)
-- Абсолютные внешние ссылки: `task_download_url`, `metadata_url` (используют `PUBLIC_BASE_URL` при активной auth)
-- Абсолютные внутренние ссылки: `task_download_url_internal`, `metadata_url_internal` (используют `INTERNAL_BASE_URL`, если задан; иначе `request.host_url`)
-
-### Режимы
-- Internal (auth=disabled): без `API_KEY` и без активного `PUBLIC_BASE_URL`. Ссылки будут строиться от `request.host_url`.
-- Public (auth=enabled): `PUBLIC_BASE_URL` + `API_KEY` заданы. Возвращаются внешние и внутренние абсолютные URL.
-
-Дополнительно:
-- Порядок ключей JSON сохраняется, поле `client_meta` добавляется последним для удобства восприятия
-
-## Быстрая настройка
-
-Рекомендуемые конфигурации для типичных сценариев.
-
-### Production за reverse-proxy (публичный доступ)
-
-**Публичная версия настроена автоматически:**
-- ✅ 2 воркера (фиксировано)
-- ✅ Встроенный Redis (фиксировано)
-- ✅ TTL 24 часа (фиксировано)
-
-**Что можно настроить:**
-- `PUBLIC_BASE_URL`: публичный URL вашего сервиса, например `https://yt.example.com`
-- `API_KEY`: обязательный — включает авторизацию (Bearer)
-- `PROGRESS_LOG=off`: чтобы не засорять логи прогрессом (по умолчанию)
-- `LOG_LEVEL=INFO` (или `ERROR` для ещё тише)
-
-Docker run пример:
-```bash
-docker run -d -p 5000:5000 \
-  -e PUBLIC_BASE_URL=https://yt.example.com \
-  -e API_KEY=${API_KEY} \
-  -e PROGRESS_LOG=off \
-  -e LOG_LEVEL=INFO \
-  -v $(pwd)/tasks:/app/tasks \
-  alexbic/youtube-downloader-api:latest
+Authorization: Bearer <API_KEY>
 ```
 
-### Внутренний контур (только из вашей сети)
+Защищённые: `POST /download_video`
+Открытые: `GET /health`, `GET /task_status/<id>`, `GET /download/<path>`, `GET /api/version`
 
-Без `API_KEY` и без `PUBLIC_BASE_URL` (auth=disabled):
+---
 
-```bash
-docker run -d -p 5000:5000 \
-  -e PROGRESS_LOG=off \
-  -e LOG_LEVEL=INFO \
-  -v $(pwd)/tasks:/app/tasks \
-  alexbic/youtube-downloader-api:latest
+## Webhook
+
+При указании `webhook_url` POST-запрос отправляется при завершении или ошибке задачи.
+
+**Payload (completed):**
+```json
+{
+  "task_id": "...",
+  "status": "completed",
+  "result": { "..." },
+  "client_meta": { "..." }
+}
 ```
 
-### Логирование
-- `LOG_LEVEL`: уровень логов приложения. Значения: `DEBUG`, `INFO` (по умолчанию), `WARNING`, `ERROR`, `CRITICAL`.
-- Прогресс скачивания yt-dlp отключен в публичной версии (hardcoded).
-- Опции и предупреждения yt-dlp не логируются в публичной версии (hardcoded).
+**Payload (failed):**
+```json
+{
+  "task_id": "...",
+  "status": "failed",
+  "error": { "code": "...", "message": "..." },
+  "client_meta": { "..." }
+}
+```
 
-Пример запуска:
+Доставка: 3 немедленных попытки с экспоненциальной задержкой, затем фоновый resender каждые 15 минут до истечения TTL.
 
-```bash
-# Установка уровня логирования
-docker run -d -p 5000:5000 \
-  -e LOG_LEVEL=DEBUG \
-  alexbic/youtube-downloader-api:latest
+---
+
+## Архитектура
+
+Один Docker-образ, 4 процесса под управлением Supervisor:
+
+```
+bgutil (priority 5)        — Node.js сервер PO Token (порт 4416)
+redis (priority 10)        — Встроенный Redis
+orchestrator (priority 20) — Восстановление, определение сбоев, webhook resender
+gunicorn (priority 40)     — Flask API, 2 воркера (стартует после оркестратора)
 ```
 
 ---
 
 ## Решение проблем
 
-### Частые проблемы
+**YouTube 403 / «Подтвердите, что вы не бот»**
+- bgutil обрабатывает PO Token автоматически — для публичных видео это не должно происходить
+- Проверьте bgutil: `docker logs ytdl | grep bgutil`
 
-#### 1. YouTube блокирует загрузку
+**Задача застряла в `processing`**
+- Оркестратор обнаруживает сбои через heartbeat (таймаут 90с) и автоматически перезапускает задачу
+- Смотрите логи: `docker logs ytdl`
 
-**Проблема:** `Sign in to confirm you're not a bot` или `Private video`
+**Файл не найден (404)**
+- Файлы автоматически удаляются через 24 часа после создания задачи
+- Скачивайте сразу после получения статуса `completed`
 
-**Решения:**
-- Используйте cookies из приватного/инкогнито окна (см. секцию "Запуск с cookies")
-- Добавьте задержку 5-10 секунд между запросами
-- Рассмотрите использование PO Token для современных видео
-- Проверьте, не является ли видео приватным/удалённым/с возрастным ограничением
-
-#### 2. Redis не подключается
-
-**Проблема:** `Could not connect to Redis`
-
-**Примечание:** Публичная версия имеет **встроенный Redis** - эта ошибка не должна возникать. Если вы видите эту ошибку:
-- Перезапустите контейнер: `docker restart yt-downloader`
-- Проверьте логи контейнера: `docker logs yt-downloader`
-- Для внешней конфигурации Redis используйте [YouTube Downloader API Pro](https://github.com/alexbic/youtube-downloader-api-pro)
-
-#### 3. Файлы не найдены после загрузки
-
-**Проблема:** `404 File not found`
-
-**Решения:**
-- Файлы автоматически удаляются через 24 часа в публичной версии (не настраивается)
-- Скачивайте сразу после `status: "completed"`
-- Для настраиваемого TTL или постоянного хранилища используйте [YouTube Downloader API Pro](https://github.com/alexbic/youtube-downloader-api-pro)
-
-#### 4. Webhook не получен
-
-**Проблема:** Webhook payload не приходит
-
-**Решения:**
-- Убедитесь что webhook URL доступен из контейнера
-- API повторяет попытки 3 раза с интервалом 5 секунд
-- Проверьте логи контейнера: `docker logs youtube-downloader`
-- Убедитесь что webhook endpoint принимает POST запросы
-- Используйте абсолютные URL (http/https)
-
-#### 5. Прямая ссылка возвращает 403 Forbidden
-
-**Проблема:** Прямая ссылка протухла или заблокирована
-
-**Решения:**
-- Прямые ссылки имеют ограниченный срок действия (несколько часов)
-- Используйте `/download_video` для надёжного скачивания
-- Скачивайте сразу после получения прямой ссылки
-- Добавьте необходимые http_headers из ответа
-
-#### 6. Ошибки аутентификации
-
-**Проблема:** `401 Unauthorized` или `Invalid API key`
-
-**Решения:**
-- Если `API_KEY` задан, все защищённые endpoints требуют `Authorization: Bearer <key>`
-- Защищённый endpoint: `/download_video`
-- Публичные endpoints (без авторизации): `/health`, `/task_status`, `/download`
-- Если используется внутренний Docker режим, полностью уберите `API_KEY`
-
-#### 7. Ошибки валидации client_meta
-
-**Проблема:** `client_meta validation failed` или `client_meta too large`
-
-**Решения:**
-- Макс. размер: 16 КБ (JSON UTF-8)
-- Макс. вложенность: 5 уровней
-- Макс. количество ключей: 200 всего
-- Макс. длина строки: 1000 символов
-- Макс. длина списка: 200 элементов
-- Используйте плоскую структуру когда возможно
-
-### Логирование
-
-**Просмотр логов контейнера:**
-```bash
-# Логи в реальном времени
-docker logs -f youtube-downloader
-
-# Последние 100 строк
-docker logs --tail 100 youtube-downloader
-
-# Логи с временными метками
-docker logs -t youtube-downloader
-```
-
-**Уровни логирования:**
-- `DEBUG` - подробное логирование включая опции yt-dlp
-- `INFO` - стандартное логирование (по умолчанию)
-- `WARNING` - только предупреждения
-- `ERROR` - только ошибки
-- `CRITICAL` - только критические ошибки
-
-**Режимы логирования прогресса:**
-- В публичной версии прогресс yt-dlp всегда отключен (hardcoded)
-- Настраиваемые режимы доступны в Pro версии
+**Redis недоступен**
+- Redis встроен в контейнер — перезапустите: `docker restart ytdl`
 
 ---
 
-## Troubleshooting для n8n
-
-### Ошибка: "Cannot create a string longer than 0x1fffffe8 characters"
-
-**Причина**: n8n работает в режиме `binaryDataMode: "default"`, который хранит бинарные данные в памяти. Для больших файлов (>500MB) память переполняется.
-
-**Решение 1: Настроить n8n для работы с большими файлами (РЕКОМЕНДУЕТСЯ)**
-
-Добавьте переменную окружения в ваш docker-compose.yml или docker run:
-
-```yaml
-# docker-compose.yml
-services:
-  n8n:
-    environment:
-      - N8N_DEFAULT_BINARY_DATA_MODE=filesystem
-      # ... другие переменные
-```
-
-Или для docker run:
-```bash
-docker run -e N8N_DEFAULT_BINARY_DATA_MODE=filesystem ...
-```
-
-После этого перезапустите n8n. Теперь бинарные данные будут сохраняться на диск вместо памяти.
-
-**Решение 2: Настройки HTTP Request node**
-
-В ноде скачивания файла (Node 2):
-1. Откройте настройки HTTP Request node
-2. Найдите параметр **"Response Format"**
-3. Измените с "String" на **"File"**
-4. Убедитесь что указано "Binary Property": **data**
-
-**⚠️ Важно**: Если вы используете queue mode в n8n, режим filesystem не поддерживается. В этом случае рассмотрите использование S3 (`N8N_DEFAULT_BINARY_DATA_MODE=s3`).
-
-### Ошибка: "Invalid URL: /download_file/..."
-
-**Причина**: Используется относительный путь вместо полного URL.
-
-**Решение**: Используйте поле `task_download_url` из ответа статуса/синхронного запроса:
-```
-Правильно: {{ $json.task_download_url }}
-Неправильно: {{ $json.task_download_path }}
-```
-
-### Ошибка: "HTTP Error 403: Forbidden"
-
-**Причина**: YouTube блокирует прямые ссылки после истечения срока действия.
-
-**Решение**: Используйте endpoint `/download_video` для скачивания видео на сервер. Он сохраняет файл и возвращает ссылку для скачивания.
-
-## Безопасность
-
-- API не хранит персональные данные пользователей
-- Загруженные файлы хранятся во временных папках
-- Рекомендуется использовать за reverse proxy (nginx/traefik)
-- Добавьте rate limiting для production использования
-
----
-
-## Разработка
-
-### Локальная сборка
+## Сборка локально
 
 ```bash
 git clone https://github.com/alexbic/youtube-downloader-api.git
 cd youtube-downloader-api
-docker build -t youtube-downloader:local .
-docker run -p 5000:5000 youtube-downloader:local
+docker build -t youtube-downloader-api:local .
+docker run -d -p 5000:5000 -e SERVER_BASE_URL=http://localhost:5000 youtube-downloader-api:local
 ```
-
-### Локальный запуск (без Docker)
-
-```bash
-pip install -r requirements.txt
-python app.py
-```
-
----
-
-## CI/CD
-
-GitHub Actions автоматически собирает и публикует Docker образы при каждом push в `main`:
-
-1. Собирает для платформ: linux/amd64, linux/arm64
-2. Публикует на Docker Hub: `alexbic/youtube-downloader-api`
-3. Публикует на GitHub Container Registry: `ghcr.io/alexbic/youtube-downloader-api`
-4. Обновляет описание на Docker Hub
-
-Статус сборки: [GitHub Actions](https://github.com/alexbic/youtube-downloader-api/actions)
 
 ---
 
 ## Технологии
 
-- Python 3.11
-- Flask 3.0.0
-- yt-dlp (latest)
-- FFmpeg
-- Gunicorn
-- Redis (опционально)
-- Docker
+- Python 3.11 + Flask 3.0 + Gunicorn
+- yt-dlp + FFmpeg
+- bgutil-ytdlp-pot-provider (Node.js + Deno)
+- Redis (встроенный)
+- Supervisor
 
 ---
 
 ## Лицензия
 
-MIT License - см. файл [LICENSE](LICENSE)
-
----
-
-## 🚀 YouTube Downloader API Pro
-
-**Скоро!** Pro версия находится в активной разработке и будет доступна в ближайшее время.
-
-### Что будет в Pro версии
-
-Pro версия будет включать:
-
-- 🗄️ **PostgreSQL хранилище** - Постоянная история задач и метаданные
-- ⚙️ **Полная настройка** - Настройка workers (1-10+), TTL (от часов до месяцев), внешний Redis
-- 📊 **Кеш результатов обработки** - Хранение и запрос вывода yt-dlp для аналитики
-- 🔍 **Расширенный поиск** - Запросы по статусу, диапазону дат, полям client_meta
-- 📈 **Статистика задач** - Отслеживание успешности, времени обработки, использования канала
-- 🔄 **Очередь приоритетов** - VIP обработка задач с настраиваемыми приоритетами
-- 📧 **Email уведомления** - Оповещения о завершении задач
-- 👨‍💼 **Приоритетная поддержка** - Прямая поддержка по email и GitHub
-- 📚 **Расширенная документация** - Подробные гайды и best practices
-
-### Модель дистрибуции (В разработке)
-
-Мы оцениваем лучший способ доставки Pro версии:
-
-**Вариант 1: GitHub приватный репозиторий (Подписка)**
-- Доступ через членство в GitHub team/organization
-- Клонирование репозитория с вашими учётными данными
-- Автоматические обновления через git pull
-- Плюс: Простой, знакомый workflow для разработчиков
-- Минус: Требуется GitHub аккаунт
-
-**Вариант 2: Docker Registry (Лицензионный ключ)**
-- Загрузка Pro образа из приватного registry с лицензионным ключом
-- `docker pull pro.yourdomain.com/youtube-downloader-api-pro:latest`
-- Валидация лицензии при запуске
-- Плюс: Без раскрытия исходного кода, простой деплой
-- Минус: Требуется инфраструктура лицензионного сервера
-
-**Вариант 3: npm/PyPI приватный пакет**
-- Установка через приватный package registry
-- `pip install --extra-index-url https://pypi.yourdomain.com youtube-downloader-api-pro`
-- Плюс: Стандартное управление пакетами
-- Минус: Требуется дополнительная инфраструктура
-
-**Вариант 4: Landing страница с прямыми загрузками**
-- Покупка на landing странице → получение ссылки для скачивания
-- Ручные обновления через повторную загрузку
-- Плюс: Просто, без инфраструктуры
-- Минус: Ручной процесс обновления
-
-**Вариант 5: Гибридный подход**
-- Landing страница для покупки и генерации лицензионных ключей
-- Приватный Docker registry для Pro образов
-- GitHub приватный репозиторий для enterprise клиентов
-- Плюс: Гибкий, подходит для разных клиентов
-- Минус: Сложнее в поддержке
-
-### Текущий статус
-
-🔨 **В активной разработке**
-- Основные Pro функции реализуются в репозитории `youtube-downloader-api-pro`
-- Тестирование моделей деплоя и лицензирования
-- Подготовка документации и landing страницы
-
-📧 **Получить уведомление**
-Интересует Pro версия? Свяжитесь с нами, чтобы получить уведомление о запуске:
-- Email: support@alexbic.net
-- GitHub: Следите за репозиторием для анонсов
-
-### Ценообразование (Предварительное)
-
-Рассматриваем следующие тарифные планы:
-
-- **Индивидуальная лицензия**: $XX/месяц или $XXX/год - Одно развертывание
-- **Командная лицензия**: $XXX/месяц или $XXXX/год - До 5 развертываний
-- **Enterprise лицензия**: Индивидуальная цена - Неограниченные развертывания + SLA
-
-*Цены могут измениться до официального запуска*
+MIT — см. [LICENSE](LICENSE)
 
 ---
 
 ## Поддержка
 
-- GitHub: [@alexbic](https://github.com/alexbic)
 - Issues: [GitHub Issues](https://github.com/alexbic/youtube-downloader-api/issues)
-- Вопросы по Pro версии: support@alexbic.net
-
----
-
-## Disclaimer
-
-Этот инструмент предназначен для личного использования. Убедитесь, что вы соблюдаете условия использования YouTube и авторские права при скачивании контента.
+- Email: support@alexbic.net
