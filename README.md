@@ -107,7 +107,7 @@ services:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `url` | string | ✅ | YouTube URL |
+| `url` | string | ✅ | YouTube URL. Only YouTube is supported — any other domain returns `400 INVALID_URL` |
 | `format` | string | — | yt-dlp format string (default: best within size limit) |
 | `max_size_mb` | int | — | Max file size in MB (default: 2048) |
 | `webhook_url` | string | — | POST callback URL on completion |
@@ -119,8 +119,17 @@ services:
 {
   "task_id": "b0b8d187-...",
   "status": "queued",
-  "created_at": "2026-01-01T12:00:00",
-  "platform": "YouTube"
+  "created_at": "2026-01-01T12:00:00"
+}
+```
+
+**Response `400` — non-YouTube URL:**
+```json
+{
+  "error": {
+    "code": "INVALID_URL",
+    "message": "Only YouTube URLs are supported"
+  }
 }
 ```
 
@@ -134,7 +143,6 @@ services:
   "task_id": "b0b8d187-...",
   "status": "processing",
   "started_at": "2026-01-01T12:00:01",
-  "platform": "YouTube",
   "url": "https://www.youtube.com/watch?v=..."
 }
 ```
@@ -146,7 +154,6 @@ services:
   "status": "completed",
   "created_at": "2026-01-01T12:00:00",
   "completed_at": "2026-01-01T12:00:09",
-  "platform": "YouTube",
   "url": "https://www.youtube.com/watch?v=...",
   "result": {
     "filename": "Video Title.webm",
@@ -155,8 +162,7 @@ services:
     "title": "Video Title",
     "duration": 212,
     "thumbnail": "https://i.ytimg.com/...",
-    "uploader": "Channel Name",
-    "platform": "YouTube"
+    "uploader": "Channel Name"
   }
 }
 ```
@@ -183,16 +189,6 @@ services:
 Returns the file as an attachment. File is available for 24 hours after task completion.
 
 ---
-
-### GET /api/version
-
-```json
-{
-  "service": "youtube-downloader-api",
-  "version": "2.0.0",
-  "supported_platforms": ["YouTube"]
-}
-```
 
 All endpoints are also available under `/api/v1/` prefix.
 

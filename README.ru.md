@@ -107,7 +107,7 @@ services:
 
 | Поле | Тип | Обяз. | Описание |
 |------|-----|-------|----------|
-| `url` | string | ✅ | YouTube URL |
+| `url` | string | ✅ | YouTube URL. Поддерживается только YouTube — любой другой домен возвращает `400 INVALID_URL` |
 | `format` | string | — | yt-dlp format string (по умолчанию: лучшее в пределах лимита) |
 | `max_size_mb` | int | — | Макс. размер файла в МБ (по умолчанию: 2048) |
 | `webhook_url` | string | — | URL для POST-колбэка при завершении |
@@ -119,8 +119,17 @@ services:
 {
   "task_id": "b0b8d187-...",
   "status": "queued",
-  "created_at": "2026-01-01T12:00:00",
-  "platform": "YouTube"
+  "created_at": "2026-01-01T12:00:00"
+}
+```
+
+**Ответ `400` — не YouTube URL:**
+```json
+{
+  "error": {
+    "code": "INVALID_URL",
+    "message": "Only YouTube URLs are supported"
+  }
 }
 ```
 
@@ -134,7 +143,6 @@ services:
   "task_id": "b0b8d187-...",
   "status": "processing",
   "started_at": "2026-01-01T12:00:01",
-  "platform": "YouTube",
   "url": "https://www.youtube.com/watch?v=..."
 }
 ```
@@ -146,7 +154,7 @@ services:
   "status": "completed",
   "created_at": "2026-01-01T12:00:00",
   "completed_at": "2026-01-01T12:00:09",
-  "platform": "YouTube",
+  "url": "https://www.youtube.com/watch?v=...",
   "result": {
     "filename": "Video Title.webm",
     "download_url": "http://localhost:5000/download/b0b8d187-.../Video Title.webm",
@@ -154,8 +162,7 @@ services:
     "title": "Video Title",
     "duration": 212,
     "thumbnail": "https://i.ytimg.com/...",
-    "uploader": "Channel Name",
-    "platform": "YouTube"
+    "uploader": "Channel Name"
   }
 }
 ```
