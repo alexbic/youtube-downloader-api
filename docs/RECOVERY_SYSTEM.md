@@ -352,10 +352,3 @@ docker exec container ls -lh /app/tasks/{task_id}/output/
 4. **Compression** - Gzip old metadata.json files
 5. **Metrics** - Track verification success rates
 
-### Pro Version
-
-- PostgreSQL metadata storage
-- Transaction support for atomic updates
-- Replication for high availability
-- Point-in-time recovery
-- Audit trail for all state changes
