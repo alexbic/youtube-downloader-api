@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.0] - 2026-03-25
+
+### Breaking Changes
+
+- **Requires Docker rebuild** — new system dependencies (Deno, Node.js, bgutil).
+  Drop-in `docker-compose up -d` upgrade is NOT supported; full image rebuild required.
+
+### Added
+
+- **bgutil PO Token provider** — Node.js service that generates YouTube PO Tokens,
+  bypassing the SABR (Secure Adaptive Bitrate) restriction introduced in 2024.
+  Without this, modern YouTube downloads fail with 403 errors.
+  Uses [bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider) v1.3.1.
+- **Deno runtime** — required by yt-dlp for YouTube signature solving.
+- **Orchestrator process** — independent Python process that runs alongside Gunicorn:
+  - Startup recovery: re-enqueues interrupted tasks after container restart
+  - Crash detection: heartbeat monitoring (90s timeout), automatic retry (3 attempts)
+  - Background webhook resender: retries failed webhook deliveries
+  - Periodic cleanup: removes expired task directories
+- **Supervisor process manager** — coordinates startup order:
+  bgutil (priority 5) → Redis (priority 10) → orchestrator (priority 20) → gunicorn (priority 40).
+  Gunicorn starts only after orchestrator writes `/tmp/system-ready`.
+- **Redis-backed task queue** — `queue:queued` list; tasks stored as `metadata.json` + Redis cache with TTL.
+- **`/api/v1/` blueprint** — all endpoints available at both root and `/api/v1/` prefix.
+
+### Changed
+
+- **Architecture**: single-process → multi-process (supervisor + bgutil + orchestrator + gunicorn).
+- **Task storage**: files now stored under `/app/tasks/<task_id>/metadata.json`.
+- **Docker image size**: ~570 MB (was ~200 MB) — Deno + Node.js + bgutil added.
+- **`/api/version`** returns `2.0.0`.
+
+### Changed (limits)
+
+- Concurrency and TTL are now hardcoded: 2 workers, 24h TTL.
+
+### Upgrade from 1.x
+
+Full rebuild required (new system deps):
+
+```bash
+docker-compose down
+docker pull alexbic/youtube-downloader-api:latest
+docker-compose up -d
+```
+
+Or build locally:
+
+```bash
+git pull
+docker build -t alexbic/youtube-downloader-api:2.0.0 .
+```
+
+---
+
 ## [1.1.0] - 2025-11-26
 
 ### Added
@@ -67,7 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `/health` - service health and configuration
 - `/download/<task_id>/<filename>` - download completed files
 - Metadata.json files with complete task information
-- Progress tracking and logging (hardcoded: off in public version)
+- Progress tracking and logging (hardcoded: off)
 - HLS fragment skipping for YouTube streams
 
 ### Documentation
@@ -77,7 +132,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docker deployment guide
 - Use cases and examples
 
-### Hardcoded Limits (Public Version)
+### Hardcoded Limits
 - 2 Gunicorn workers
 - 24-hour task TTL
 - 256MB Redis memory
@@ -89,6 +144,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Release Notes
 
+- **v2.0.0**: bgutil + Orchestrator — YouTube SABR bypass, full reliability stack
 - **v1.1.0**: [docs/RELEASE_NOTES_v1.1.0.md](./RELEASE_NOTES_v1.1.0.md) - Reliability & Recovery
 - **v1.0.0**: [docs/RELEASE_NOTES.md](./RELEASE_NOTES.md) - Initial Public Release
 
@@ -130,7 +186,6 @@ docker-compose up -d
 - **Repository**: https://github.com/alexbic/youtube-downloader-api
 - **Docker Hub**: https://hub.docker.com/r/alexbic/youtube-downloader-api
 - **Issues**: https://github.com/alexbic/youtube-downloader-api/issues
-- **Pro Version**: https://github.com/alexbic/youtube-downloader-api-pro
 
 ---
 

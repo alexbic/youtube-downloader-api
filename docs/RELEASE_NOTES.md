@@ -675,9 +675,9 @@ services:
 
 ## 🔧 Technical Details
 
-### Hardcoded Parameters (Public Version)
+### Hardcoded Parameters
 
-Публичная версия имеет фиксированные параметры для стабильности:
+Следующие параметры зафиксированы:
 
 **Storage:**
 - Workers: 2 (hardcoded в Dockerfile)
@@ -825,36 +825,11 @@ while True:
 
 ---
 
-## ⚠️ Known Limitations (Public Version)
+## ⚠️ Known Limitations
 
-**Фиксированные параметры:**
-- ❌ Нельзя изменить количество workers
-- ❌ Нельзя изменить TTL задач (всегда 24 часа)
-- ❌ Нельзя использовать внешний Redis
-- ❌ Нет PostgreSQL для хранения метаданных
-- ❌ Нет endpoint `/results` для поиска задач
-- ❌ Нет batch обработки
-- ❌ Максимум 256MB Redis памяти
-
-**Для снятия ограничений:** обратитесь за Pro версией на support@alexbic.net
-
----
-
-## 🚀 Pro Version Features
-
-**Доступно в Pro версии:**
-- ✅ Configurable workers (1-10+)
-- ✅ External Redis/PostgreSQL support
-- ✅ Variable task TTL (hours to months)
-- ✅ `/task/{id}/results` endpoint with search & filtering
-- ✅ Batch download operations
-- ✅ Custom webhook retry parameters
-- ✅ Advanced logging modes
-- ✅ Cloud storage integration (S3/MinIO/GCS)
-- ✅ Priority support with SLA
-- ✅ Private repository access
-
-**Contact:** support@alexbic.net
+- Workers: 2 (fixed)
+- Task TTL: 24 hours (fixed)
+- Redis: built-in, 256 MB (fixed)
 
 ---
 

@@ -1,96 +1,53 @@
 version: '3.8'
 
 # ========================================
-# YouTube Downloader API - PUBLIC VERSION
+# YouTube Downloader API — PUBLIC VERSION
 # ========================================
 #
-# Standalone Docker container for downloading YouTube videos.
+# Self-contained Docker container: Redis + bgutil + orchestrator + gunicorn
+# all run inside a single container managed by Supervisor.
 #
-# PUBLIC VERSION LIMITATIONS (hardcoded, not configurable):
-# - Workers: 2 (fixed)
-# - Task TTL: 24 hours (fixed)
-# - Redis: Built-in, 256MB memory limit
-# - Webhook resender: 15-minute interval (fixed)
+# PUBLIC VERSION — fixed limits (not configurable):
+#   Workers        : 2
+#   Task TTL       : 24 hours
+#   Redis          : built-in, 256 MB
+#   Max concurrent : 2
 #
-# For flexible configuration and advanced features, see:
-# https://github.com/alexbic/youtube-downloader-api-pro
+# For flexible configuration and advanced features see the Pro version.
 #
 
 services:
   youtube-downloader:
-    # Docker Hub image (recommended for production)
     image: alexbic/youtube-downloader-api:latest
 
-    # Alternative: GitHub Container Registry
-    # image: ghcr.io/alexbic/youtube-downloader-api:latest
+    # Uncomment to build locally instead:
+    # build: .
 
     ports:
-      # Host port 5002 mapped to container port 5000
-      # Change 5002 to your preferred port if needed
-      - "5002:5000"
+      - "${HOST_PORT:-5002}:5000"
 
     volumes:
-      # Task storage directory (downloaded videos and metadata)
-      # Files are automatically deleted after 24 hours (fixed TTL in public version)
-      - ./testing/tasks:/app/tasks
+      # Downloaded files and task metadata (auto-deleted after 24 h)
+      - ./tasks:/app/tasks
 
-      # OPTIONAL: YouTube cookies for bypassing restrictions
-      # Uncomment the line below and place cookies.txt next to docker-compose.yml
-      # Export cookies from browser using extension (see README for details)
-      # - ./cookies.txt:/app/cookies.txt
+      # OPTIONAL: YouTube cookies to bypass geo/age restrictions
+      # Export from browser with a cookies.txt extension, then uncomment:
+      # - ./cookies.txt:/app/cookies.txt:ro
 
     environment:
-      # =====================================
-      # REQUIRED FOR PUBLIC DEPLOYMENT
-      # =====================================
+      # Public base URL for generating absolute download links.
+      # Examples: https://ytdl.example.com  or  http://192.168.1.10:5002
+      # Leave empty for internal/local use.
+      SERVER_BASE_URL: ${SERVER_BASE_URL:-}
 
-      # Public base URL for generating absolute download links
-      # Used when API is behind reverse proxy or has custom domain
-      # Examples: https://ytdl.example.com or https://api.example.com/ytdl
-      # Leave empty for internal/local use without authentication
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      # API Key (Bearer token). Leave empty to disable auth.
+      # Generate: openssl rand -hex 32
+      API_KEY: ${API_KEY:-}
 
-      # API Key for authentication (Bearer token)
-      # IMPORTANT: Authentication is ENABLED only when PUBLIC_BASE_URL is also set
-      # Generate secure key: openssl rand -hex 32
-      # If not set, API will work without authentication (only for internal networks!)
-      API_KEY: ${API_KEY}
+      # Max video file size in MB (default: 2048)
+      MAX_DOWNLOAD_VIDEO_SIZE_MB: ${MAX_DOWNLOAD_VIDEO_SIZE_MB:-2048}
 
-      # =====================================
-      # OPTIONAL CONFIGURATION
-      # =====================================
-
-      # Client metadata validation limits (optional, has defaults)
-      MAX_CLIENT_META_BYTES: 16384    # Max JSON size in bytes
-      MAX_CLIENT_META_DEPTH: 5        # Max nesting depth
-      MAX_CLIENT_META_KEYS: 200       # Max number of keys
-
-      # Logging configuration
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}   # Options: DEBUG, INFO, WARNING, ERROR
-
-      # =====================================
-      # WEBHOOK CONFIGURATION (OPTIONAL)
-      # =====================================
-
-      # Default webhook URL for all async tasks (fallback if request has no webhook_url)
-      # DEFAULT_WEBHOOK_URL: "https://your-server.com/webhooks/ytdl"
-
-      # Custom headers for webhook POST requests (useful for authentication)
-      # Format: JSON object or semicolon-separated list
-      # Examples:
-      #   WEBHOOK_HEADERS: '{"Authorization": "Bearer secret123", "X-Source": "ytdl"}'
-      #   WEBHOOK_HEADERS: "Authorization: Bearer secret123; X-Source: ytdl"
-
-      # =====================================
-      # PUBLIC VERSION - FIXED LIMITS
-      # =====================================
-      # The following parameters are HARDCODED and CANNOT be changed:
-      # - WORKERS: 2 (fixed)
-      # - CLEANUP_TTL_SECONDS: 86400 (24 hours, fixed)
-      # - REDIS_HOST: localhost (built-in, fixed)
-      # - WEBHOOK_BACKGROUND_INTERVAL_SECONDS: 900 (15 minutes, fixed)
-      #
-      # For configurable limits, upgrade to Pro version:
-      # https://github.com/alexbic/youtube-downloader-api-pro
+      # Log level: DEBUG | INFO | WARNING | ERROR
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
     restart: unless-stopped

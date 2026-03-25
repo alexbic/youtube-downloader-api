@@ -37,6 +37,8 @@ ERROR_INVALID_OPERATION = "INVALID_OPERATION"
 
 # Task errors
 ERROR_TASK_NOT_FOUND = "TASK_NOT_FOUND"
+ERROR_TASK_DELETE_FAILED = "TASK_DELETE_FAILED"
+ERROR_TASK_IN_PROGRESS = "TASK_IN_PROGRESS"
 ERROR_FILE_NOT_FOUND = "FILE_NOT_FOUND"
 ERROR_INVALID_PATH = "INVALID_PATH"
 
@@ -49,6 +51,7 @@ ERROR_LIVE_STREAM_OFFLINE = "LIVE_STREAM_OFFLINE"
 ERROR_NETWORK_ERROR = "NETWORK_ERROR"
 ERROR_EXTRACTION_FAILED = "EXTRACTION_FAILED"
 ERROR_DOWNLOAD_FAILED = "DOWNLOAD_FAILED"
+ERROR_FORMAT_NOT_AVAILABLE = "FORMAT_NOT_AVAILABLE"
 
 # Processing errors (video-processor-api specific)
 ERROR_VIDEO_DOWNLOAD_FAILED = "VIDEO_DOWNLOAD_FAILED"
@@ -56,6 +59,9 @@ ERROR_OPERATION_FAILED = "OPERATION_FAILED"
 ERROR_FFMPEG_ERROR = "FFMPEG_ERROR"
 ERROR_INVALID_TIME_RANGE = "INVALID_TIME_RANGE"
 ERROR_INVALID_TEMPLATE = "INVALID_TEMPLATE"
+ERROR_TEXT_ITEMS_LIMIT_EXCEEDED = "TEXT_ITEMS_LIMIT_EXCEEDED"
+ERROR_TEXT_PROCESSING_FAILED = "TEXT_PROCESSING_FAILED"
+ERROR_FONT_NOT_FOUND = "FONT_NOT_FOUND"
 
 # Generic errors
 ERROR_UNKNOWN = "UNKNOWN_ERROR"
@@ -269,41 +275,50 @@ def is_youtube_url(url: str) -> bool:
     return 'youtube.com' in url_lower or 'youtu.be' in url_lower
 
 
-def format_ttl_human(hours: int) -> str:
+def format_ttl_human(minutes: int) -> str:
     """
-    Formats TTL hours into human-readable string.
+    Formats TTL minutes into human-readable string.
 
     Args:
-        hours: Number of hours
+        minutes: Number of minutes
 
     Returns:
-        Human-readable string (e.g., "2 days", "3 days 6h", "12h")
+        Human-readable string (e.g., "2 days", "3 days 6h", "12h", "30m")
 
     Example:
-        >>> format_ttl_human(24)
+        >>> format_ttl_human(1440)
         "1 day"
-        >>> format_ttl_human(72)
+        >>> format_ttl_human(4320)
         "3 days"
-        >>> format_ttl_human(30)
+        >>> format_ttl_human(1800)
         "1 day 6h"
+        >>> format_ttl_human(30)
+        "30m"
     """
-    if hours >= 24:
-        days = hours // 24
-        remaining_hours = hours % 24
+    if minutes >= 1440:  # >= 1 day
+        days = minutes // 1440
+        remaining_hours = (minutes % 1440) // 60
         if remaining_hours == 0:
             return f"{days} day{'s' if days != 1 else ''}"
         else:
             return f"{days} day{'s' if days != 1 else ''} {remaining_hours}h"
+    elif minutes >= 60:  # >= 1 hour
+        hours = minutes // 60
+        remaining_minutes = minutes % 60
+        if remaining_minutes == 0:
+            return f"{hours}h"
+        else:
+            return f"{hours}h {remaining_minutes}m"
     else:
-        return f"{hours}h"
+        return f"{minutes}m"
 
 
 # ============================================
 # VERSION INFO
 # ============================================
 
-API_COMMONS_VERSION = "1.2.0"
-API_COMMONS_DATE = "2025-11-26"
+API_COMMONS_VERSION = "1.2.1"
+API_COMMONS_DATE = "2025-12-22"
 
 __all__ = [
     # Error codes - Authentication
@@ -319,6 +334,8 @@ __all__ = [
     "ERROR_INVALID_OPERATION",
     # Error codes - Tasks
     "ERROR_TASK_NOT_FOUND",
+    "ERROR_TASK_DELETE_FAILED",
+    "ERROR_TASK_IN_PROGRESS",
     "ERROR_FILE_NOT_FOUND",
     "ERROR_INVALID_PATH",
     # Error codes - Download (YouTube)

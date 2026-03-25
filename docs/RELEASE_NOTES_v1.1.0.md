@@ -152,9 +152,8 @@ logger.debug(f"Startup recovery completed in process {os.getpid()}")
 
 **Изменения:**
 - ✅ Удалены hardcoded параметры из таблиц environment variables
-- ✅ Явно указано что параметры фиксированы в public версии
+- ✅ Явно указано что параметры фиксированы
 - ✅ Улучшена структура документации
-- ✅ Добавлены ссылки на Pro версию для конфигурируемых параметров
 
 **Commits:**
 - `e377048` - docs: Clean up environment variables table
@@ -325,17 +324,6 @@ docker-compose up -d
 ---
 
 ## Coming in Next Releases
-
-**Планируется для v1.2.0:**
-- Improved error handling для edge cases
-- Extended webhook retry customization
-- Better progress tracking для длинных видео
-
-**Планируется для v2.0.0 (Pro):**
-- OAuth2 Authentication для YouTube
-- PostgreSQL storage support
-- Configurable TTL и workers
-- `/results` endpoint с поиском
 
 ---
 
